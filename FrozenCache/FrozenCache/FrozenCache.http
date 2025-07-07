@@ -1,0 +1,11 @@
+@FrowenCache_HostAddress = http://localhost:5213
+
+GET {{FrowenCache_HostAddress}}/todos/
+Accept: application/json
+
+###
+
+GET {{FrowenCache_HostAddress}}/todos/1
+Accept: application/json
+
+###
