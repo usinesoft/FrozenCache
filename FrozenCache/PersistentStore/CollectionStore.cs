@@ -4,7 +4,10 @@ using System.Runtime.InteropServices;
 namespace PersistentStore;
 
 /// <summary>
-///     A persistent collection inside a data store.
+///  A persistent collection inside a data store.
+///  The file layout:
+///  -offset 0: file header containing the offset and index keys for all the objects in the file.
+///  -offset 8 + (document_index * (8 + 8 * key_count)): long - offset of the document in the file
 /// </summary>
 public sealed class CollectionStore : IAsyncDisposable, IDisposable
 {
@@ -15,6 +18,12 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     }
 
     private readonly List<int[]> _fileMap;
+
+
+    private readonly int _numberOfKeys;
+    
+    private readonly int _documentHeaderSize;
+
 
 
     /// <summary>
@@ -34,11 +43,16 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     private MemoryMappedViewAccessor? _currentWriteView;
 
     private int _documentsInCurrentView;
+    
     private int _firstFreeOffset;
 
-    public CollectionStore(string storagePath, int binaryFileDataSize = Consts.DefaultBinaryFileDataSize,
+    public CollectionStore(string storagePath, int numberOfKeys, int binaryFileDataSize = Consts.DefaultBinaryFileDataSize,
         int maxDocumentsInEachFile = Consts.DefaultMaxDocumentsInOneFile)
     {
+        _numberOfKeys = numberOfKeys;
+
+        _documentHeaderSize = sizeof(long) * (1 + _numberOfKeys); // 1 for the offset, and one for each key
+
         _binaryFileDataSize = binaryFileDataSize;
 
         _maxDocuments = maxDocumentsInEachFile;
@@ -267,5 +281,42 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
         _currentWriteView?.SafeMemoryMappedViewHandle.AcquirePointer(ref ptr);
         Marshal.Copy(data, 0, IntPtr.Add(new IntPtr(ptr), offset), data.Length);
         _currentWriteView?.SafeMemoryMappedViewHandle.ReleasePointer();
+    }
+}
+
+
+/// <summary>
+/// At the beginning of the binary file there is a header that contains the offsets and index keys for all the objects.
+/// This class contains data for one object. 
+/// </summary>
+public class PersistentObjectHeader
+{
+    public long OffsetInFile { get; set; }
+
+    public long[] IndexKeys { get; set; } = [];
+
+    public void FromBytes(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length % 8 != 0)
+        {
+            throw new CacheException("A header size must by a multiple of 8 (sizeof long)");
+        }
+
+        if (bytes.Length < 16)
+        {
+            throw new CacheException("A header size must contain at least an offset and one key");
+        }
+
+        int keys = bytes.Length / 8 - 1; // first 8 bytes are the offset, the rest are keys
+
+        OffsetInFile = BitConverter.ToInt64(bytes[..8]);
+        IndexKeys = new long[keys];
+
+        var offset = 8; // start after the offset
+        for (int i = 0; i < keys; i++)
+        {
+            IndexKeys[i] = BitConverter.ToInt64(bytes[offset..(offset+8)]);
+            offset += 8;
+        }
     }
 }

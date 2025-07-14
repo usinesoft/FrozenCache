@@ -9,7 +9,7 @@ public class Item(byte[] data, params long[] keys)
 {
     public long[] Keys { get; private set; } = keys;
 
-    public byte[]? Data { get; private set; } = data;
+    public byte[] Data { get; private set; } = data;
 }
 
 [JsonSerializable(typeof(CollectionMetadata))]

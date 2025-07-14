@@ -41,9 +41,10 @@ public interface IDataStore
     /// Create a new version of a collection and index it in memory.
     /// The collection must already exist. This new version will be available when iteration ends;
     /// </summary>
-    /// <param name="collectionName"></param>
+    /// <param name="collectionName">name of an existing collection</param>
+    /// <param name="newVersion">unique name of a new version</param>
     /// <param name="items"></param>
-    public void FeedCollection(string collectionName, IEnumerable<Item> items);
+    public void FeedCollection(string collectionName, string newVersion, IEnumerable<Item> items);
 
 }
 

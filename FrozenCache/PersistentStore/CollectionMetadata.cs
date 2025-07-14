@@ -31,5 +31,22 @@ public class CollectionMetadata
 
     public string Name { get; }
     
-    public string? LastVersion { get;}
+    public string? LastVersion { get; set; }
+
+    /// <summary>
+    /// Maximum number of items that can be stored in a single file. A collection is split into multiple files if it exceeds this limit.
+    /// </summary>
+    public int MaxItemsInFile { get; set; } = 1_000_000;
+
+    /// <summary>
+    /// Maximum size of a file in bytes. If a collection exceeds this size, it will be split into multiple files.
+    /// </summary>
+    public int FileSize { get; set; } = 1_000_000_000;
+
+    /// <summary>
+    /// Maximum number of versions to keep for this collection. When a new version is created, the oldest version will be deleted if the limit is exceeded.
+    /// </summary>
+    public int MaxVersionsToKeep { get; set; } = 2;
 }
+
+public record IndexMetadata(string Name, bool IsUnique = false);

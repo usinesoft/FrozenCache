@@ -4,8 +4,6 @@ namespace PersistentStore
 {
 
 
-    public record IndexMetadata(string Name,bool IsUnique = false);
-
     /// <summary>
     /// A store contains indexed persistent collections of items.
     /// </summary>
@@ -47,7 +45,6 @@ namespace PersistentStore
             var json = JsonSerializer.Serialize(metadata);
             File.WriteAllText(Path.Combine(path, "metadata.json"), json);
 
-            _collectionStores[metadata.Name] = new CollectionStore(path);
         }
 
         public CollectionMetadata[] GetCollections()
@@ -67,6 +64,16 @@ namespace PersistentStore
                 }
                 var json = File.ReadAllText(metadataPath);
                 collections[i] = JsonSerializer.Deserialize<CollectionMetadata>(json) ?? throw new CacheException("Failed to deserialize collection metadata");
+
+                // get available versions
+                var versions = Directory.EnumerateDirectories(dir)
+                    .Select(Path.GetFileName)
+                    .Where(name => name != "metadata.json")
+                    .OrderBy(x=>x)
+                    .ToList();
+
+                if (versions.Count > 0)
+                    collections[i].LastVersion = versions[^1];
             }
             return collections;
 
@@ -79,10 +86,7 @@ namespace PersistentStore
                 store.Dispose();
                 _collectionStores.Remove(name);
             }
-            else
-            {
-                throw new CacheException("Collection not found");
-            }
+            
 
             var path = Path.Combine(RootPath, name);
 
@@ -94,9 +98,31 @@ namespace PersistentStore
             Directory.Delete(path, true);
         }
 
+
+        private bool _opened;
+        
         public void Open()
         {
-            throw new NotImplementedException();
+            if(_opened)
+                throw new CacheException("DataStore is already opened");
+            
+            _opened = true;
+
+            Directory.EnumerateDirectories(RootPath).ToList().ForEach(dir =>
+            {
+                var metadataPath = Path.Combine(dir, "metadata.json");
+                if (!File.Exists(metadataPath))
+                {
+                    throw new CacheException($"Metadata file not found in {dir}");
+                }
+                var json = File.ReadAllText(metadataPath);
+                var metadata = JsonSerializer.Deserialize<CollectionMetadata>(json) ??
+                               throw new CacheException("Failed to deserialize collection metadata");
+               
+                _collectionStores[metadata.Name] = new CollectionStore(dir, metadata.Indexes.Count);
+            });
+
+
         }
 
         public Item GetByPrimaryKey(string collectionName, long keyValue)
@@ -104,9 +130,45 @@ namespace PersistentStore
             throw new NotImplementedException();
         }
 
-        public void FeedCollection(string collectionName, IEnumerable<Item> items)
+        public void FeedCollection(string collectionName, string newVersion, IEnumerable<Item> items)
         {
-            throw new NotImplementedException();
+            if (!_opened)
+                throw new CacheException("DataStore is not opened. Call Open() before feeding collections.");
+
+            var path = Path.Combine(RootPath, collectionName);
+
+            if (!Directory.Exists(path))
+            {
+                throw new CacheException($"Collection {collectionName} not found. Call CreateCollection()");
+            }
+
+            var metadataPath = Path.Combine(path, "metadata.json");
+            if (!File.Exists(metadataPath))
+            {
+                throw new CacheException($"Metadata file not found in {path}");
+            }
+
+            var json = File.ReadAllText(metadataPath);
+            var collectionMetadata = JsonSerializer.Deserialize<CollectionMetadata>(json) ??
+                                     throw new CacheException("Failed to deserialize collection metadata");
+
+            var versionPath = Path.Combine(path, newVersion);
+            if (Directory.Exists(versionPath))
+                throw new CacheException($"Version {newVersion} already exits");
+
+            var collectionStore = new CollectionStore(versionPath, collectionMetadata.FileSize, collectionMetadata.MaxItemsInFile);
+
+            foreach (var item in items)
+            {
+                collectionStore.StoreNewDocument(item.Data);
+            }
+
+            // replace previous version if any
+            if (_collectionStores.TryGetValue(collectionName, out var store))
+            {
+                store.Dispose();
+            }
+            _collectionStores[collectionName] = collectionStore;
         }
 
         public async ValueTask DisposeAsync()
