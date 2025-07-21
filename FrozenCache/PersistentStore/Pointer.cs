@@ -1,7 +1,8 @@
 ﻿namespace PersistentStore;
 
 /// <summary>
-///     A pointer uniquely identifies an object in a low lever binary data store
+///     A pointer uniquely identifies an object in a low level binary data store
+///     The document is identified by the file index and the offset inside the file
 /// </summary>
 public class Pointer
 {

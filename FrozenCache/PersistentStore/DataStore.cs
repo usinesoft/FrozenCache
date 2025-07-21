@@ -119,7 +119,17 @@ namespace PersistentStore
                 var metadata = JsonSerializer.Deserialize<CollectionMetadata>(json) ??
                                throw new CacheException("Failed to deserialize collection metadata");
                
-                _collectionStores[metadata.Name] = new CollectionStore(dir, metadata.Indexes.Count);
+                var allVersionsDirectories = Directory.EnumerateDirectories(dir)
+                    .OrderBy(x => x)
+                    .ToList();
+
+
+                if (allVersionsDirectories.Count > 0)
+                {
+                    _collectionStores[metadata.Name] = new CollectionStore(allVersionsDirectories[^1], metadata.Indexes.Count);
+                }
+
+                    
             });
 
 
@@ -127,7 +137,7 @@ namespace PersistentStore
 
         public Item GetByPrimaryKey(string collectionName, long keyValue)
         {
-            throw new NotImplementedException();
+            return _collectionStores[collectionName].GetByFirstKey(keyValue);
         }
 
         public void FeedCollection(string collectionName, string newVersion, IEnumerable<Item> items)
@@ -156,12 +166,14 @@ namespace PersistentStore
             if (Directory.Exists(versionPath))
                 throw new CacheException($"Version {newVersion} already exits");
 
-            var collectionStore = new CollectionStore(versionPath, collectionMetadata.FileSize, collectionMetadata.MaxItemsInFile);
+            var collectionStore = new CollectionStore(versionPath,collectionMetadata.Indexes.Count, collectionMetadata.FileSize, collectionMetadata.MaxItemsInFile);
 
             foreach (var item in items)
             {
-                collectionStore.StoreNewDocument(item.Data);
+                collectionStore.StoreNewDocument(item);
             }
+
+            collectionStore.EndOfFeed();
 
             // replace previous version if any
             if (_collectionStores.TryGetValue(collectionName, out var store))

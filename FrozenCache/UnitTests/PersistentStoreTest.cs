@@ -105,37 +105,104 @@ namespace UnitTests
         }
 
         [Test]
-        public void FeedTwoMillionItemsInCollection()
+        [TestCase(100, 1000)]
+        [TestCase(2000, 5000)]
+        public void FeedTwoMillionItemsInCollection(int smallObjectSize, int largeObjectSize)
         {
-            using var store = new DataStore(StoreName);
-
-            byte[] data1 = new byte[1000];
-            byte[] data2 = new byte[100];
-
-            var items = new List<Item>();
-            for (int i = 0; i < 2_000_000; i++)
+            using (var store = new DataStore(StoreName))
             {
-                items.Add(i % 2 == 0 ? new Item(data1, i, i + 1) : new Item(data2, i, i + 1));
+
+                byte[] data1 = new byte[1000];
+                byte[] data2 = new byte[100];
+
+                var items = new List<Item>();
+                for (int i = 0; i < 2_000_000; i++)
+                {
+                    items.Add(i % 2 == 0 ? new Item(data1, i, i + 1) : new Item(data2, i, i + 1));
+                }
+
+
+                store.Open();
+
+                store.CreateCollection(new CollectionMetadata("persons", "id", "client_id"));
+
+                Stopwatch watch = Stopwatch.StartNew();
+
+                store.FeedCollection("persons", "v001", items);
+
+                var duration = watch.ElapsedMilliseconds;
+
+                Console.WriteLine($"Feeding 2 million items took {duration} ms");
+
+                var collections = store.GetCollections();
+                Assert.That(collections.Length, Is.EqualTo(1),
+                    "Store should have one collection after feeding first version");
+                Assert.That(collections[0].Name, Is.EqualTo("persons"), "Collection name should match the one created");
+                Assert.That(collections[0].LastVersion, Is.EqualTo("v001"),
+                    "Last version should be '001' after first feed");
             }
 
 
-            store.Open();
+            // retrieve items by primary key
+            using (var store = new DataStore(StoreName))
+            {
+                store.Open();
+                var collections = store.GetCollections();
+                Assert.That(collections.Length, Is.EqualTo(1), "Store should have one collection after reopening");
+                Assert.That(collections[0].Name, Is.EqualTo("persons"), "Collection name should match the one created");
+                Assert.That(collections[0].LastVersion, Is.EqualTo("v001"),
+                    "Last version should be '001' after first feed");
+                var item0 = store.GetByPrimaryKey("persons", 0);
+                var item1000 = store.GetByPrimaryKey("persons", 1000);
+                var item1001 = store.GetByPrimaryKey("persons", 1001);
 
-            store.CreateCollection(new CollectionMetadata("persons", "id", "client_id"));
+                Assert.That(item0, Is.Not.Null, "Item with id 0 should exist");
+                Assert.That(item0.Keys[0], Is.EqualTo(0));
+                Assert.That(item0.Data.Length, Is.EqualTo(1000), "Item with id 1000 should have data length of 1000");
 
-            Stopwatch watch = Stopwatch.StartNew();
+                Assert.That(item1000, Is.Not.Null, "Item with id 1000 should exist");
+                Assert.That(item1000.Data.Length, Is.EqualTo(1000), "Item with id 1000 should have data length of 1000");
 
-            store.FeedCollection("persons", "v001", items);
+                Assert.That(item1001, Is.Not.Null, "Item with id 1001 should exist");
+                Assert.That(item1001.Keys[0], Is.EqualTo(1001));
+                Assert.That(item1001.Data.Length, Is.EqualTo(100), "Item with id 1000 should have data length of 1000");
 
-            var duration = watch.ElapsedMilliseconds;
-            
-            Console.WriteLine($"Feeding 2 million items took {duration} ms");
 
-            var collections = store.GetCollections();
-            Assert.That(collections.Length, Is.EqualTo(1), "Store should have one collection after feeding first version");
-            Assert.That(collections[0].Name, Is.EqualTo("persons"), "Collection name should match the one created");
-            Assert.That(collections[0].LastVersion, Is.EqualTo("v001"), "Last version should be '001' after first feed");
+                // check for items in the second segment
+                var itemOther = store.GetByPrimaryKey("persons", 1_000_003);
+                Assert.That(itemOther, Is.Not.Null, "Item with id 1_000_003 should exist");
+                Assert.That(itemOther.Keys[0], Is.EqualTo(1_000_003));
 
+
+                Benchmark(() =>
+                {
+                    for (int i = 100; i < 1100; i++)
+                    {
+                        _ = store.GetByPrimaryKey("persons", i * 100);
+                    }
+
+                }, "getting 1000 items form the store");
+            }
+                
+
+
+
+        }
+
+
+        public static void Benchmark(Action action, string actionDescription)
+        {
+            // execute once for warmup
+            action();
+
+            var watch = Stopwatch.StartNew();
+            for (int i = 0; i < 10; i++)
+            {
+                action();
+            }
+
+            watch.Stop();
+            Console.WriteLine($"One iteration of {actionDescription} took: {watch.ElapsedMilliseconds / 10f} ms");
         }
     }
 }
