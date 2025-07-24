@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using PersistentStore;
 
 namespace FrozenCache;
 
@@ -6,6 +7,11 @@ internal static class Program
 {
     public static void Main(string[] args)
     {
+
+        // create or open the datastore before application starts
+        var store = new DataStore("data");
+        store.Open();
+
         var builder = WebApplication.CreateSlimBuilder(args);
 
         builder.Services.ConfigureHttpJsonOptions(options =>
@@ -13,8 +19,14 @@ internal static class Program
             options.SerializerOptions.TypeInfoResolverChain.Insert(0, FrozenCache.AppJsonSerializerContext.Default);
         });
 
+        builder.Services.AddHostedService<HostedTcpServer>();
+
+        builder.Services.AddSingleton<IDataStore>(store);
+
+
         var app = builder.Build();
 
+        
         var sampleTodos = new Todo[] {
             new(1, "Walk the dog"),
             new(2, "Do the dishes", DateOnly.FromDateTime(DateTime.Now)),

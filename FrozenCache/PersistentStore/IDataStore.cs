@@ -35,7 +35,7 @@ public interface IDataStore
     /// <param name="collectionName"></param>
     /// <param name="keyValue"></param>
     /// <returns></returns>
-    public Item GetByPrimaryKey(string collectionName, long keyValue);
+    public Item? GetByPrimaryKey(string collectionName, long keyValue);
 
     /// <summary>
     /// Create a new version of a collection and index it in memory.
