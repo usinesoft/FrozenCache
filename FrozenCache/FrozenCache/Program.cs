@@ -23,6 +23,9 @@ internal static class Program
 
         builder.Services.AddSingleton<IDataStore>(store);
 
+        builder
+            .Services
+            .Configure<ServerSettings>(builder.Configuration.GetSection("ServerSettings"));
 
         var app = builder.Build();
 

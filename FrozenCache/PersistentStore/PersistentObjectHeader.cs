@@ -1,4 +1,6 @@
-﻿namespace PersistentStore;
+﻿using Messages;
+
+namespace PersistentStore;
 
 /// <summary>
 /// At the beginning of the binary file there is a header that contains the offsets, data length and index keys for all the objects.

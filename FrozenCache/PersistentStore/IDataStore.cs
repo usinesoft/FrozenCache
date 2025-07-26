@@ -44,8 +44,7 @@ public interface IDataStore
     /// <param name="collectionName">name of an existing collection</param>
     /// <param name="newVersion">unique name of a new version</param>
     /// <param name="items"></param>
-    public void FeedCollection(string collectionName, string newVersion, IEnumerable<Item> items);
+    public Task<int> FeedCollection(string collectionName, string newVersion, IAsyncEnumerable<Item> items);
 
 }
 
-public class CacheException(string? message) : Exception(message);

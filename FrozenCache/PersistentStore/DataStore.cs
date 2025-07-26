@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using Messages;
 
 namespace PersistentStore;
 
@@ -116,7 +117,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         return _collectionStores[collectionName].GetByFirstKey(keyValue);
     }
 
-    public void FeedCollection(string collectionName, string newVersion, IEnumerable<Item> items)
+    public async Task<int> FeedCollection(string collectionName, string newVersion, IAsyncEnumerable<Item> items)
     {
         if (!_opened)
             throw new CacheException("DataStore is not opened. Call Open() before feeding collections.");
@@ -129,7 +130,8 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         var metadataPath = Path.Combine(path, "metadata.json");
         if (!File.Exists(metadataPath)) throw new CacheException($"Metadata file not found in {path}");
 
-        var json = File.ReadAllText(metadataPath);
+        var json = await File.ReadAllTextAsync(metadataPath);
+
         var collectionMetadata = JsonSerializer.Deserialize<CollectionMetadata>(json) ??
                                  throw new CacheException("Failed to deserialize collection metadata");
 
@@ -140,13 +142,20 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         var collectionStore = new CollectionStore(versionPath, collectionMetadata.Indexes.Count,
             collectionMetadata.FileSize, collectionMetadata.MaxItemsInFile);
 
-        foreach (var item in items) collectionStore.StoreNewDocument(item);
+        int itemsCount = 0;
+        await foreach (var item in items)
+        {
+            collectionStore.StoreNewDocument(item);
+            itemsCount++;
+        }
 
         collectionStore.EndOfFeed();
 
         // replace previous version if any
-        if (_collectionStores.TryGetValue(collectionName, out var store)) store.Dispose();
+        if (_collectionStores.TryGetValue(collectionName, out var store)) await store.DisposeAsync();
         _collectionStores[collectionName] = collectionStore;
+
+        return itemsCount;
     }
 
     public async ValueTask DisposeAsync()

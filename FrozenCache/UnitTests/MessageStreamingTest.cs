@@ -1,5 +1,4 @@
-﻿using MessagePack;
-using Messages;
+﻿using Messages;
 using NUnit.Framework;
 
 namespace UnitTests;

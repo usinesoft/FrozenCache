@@ -135,4 +135,6 @@ namespace Messages
             return $"{nameof(Success)}: {Success}, {nameof(ErrorMessage)}: {ErrorMessage}, {nameof(Type)}: {Type}";
         }
     }
+
+    public class CacheException(string? message) : Exception(message);
 }

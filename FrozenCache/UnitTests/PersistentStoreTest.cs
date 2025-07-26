@@ -1,7 +1,9 @@
 ﻿using System.Diagnostics;
+using Messages;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
 using PersistentStore;
+// ReSharper disable AccessToDisposedClosure
 
 namespace UnitTests
 {
@@ -72,23 +74,26 @@ namespace UnitTests
         }
 
         [Test]
-        public void FeedANonExistentCollection()
+        public async Task FeedANonExistentCollection()
         {
-            using var store = new DataStore(StoreName);
+            await using var store = new DataStore(StoreName);
 
             var items = new Item[] { new(new byte[100], 1, 200), new(new byte[1000], 2, 300) };
  
-            Assert.Throws<CacheException>(() => store.FeedCollection("persons", "001", items), "should throw store not opened");
+            Assert.ThrowsAsync<CacheException>(
+                async  () => _ = await store.FeedCollection("persons", "001", items.ToAsyncEnumerable()),
+                "should throw store not opened");
 
             store.Open();
-            Assert.Throws<CacheException>(() => store.FeedCollection("persons", "001", items), "should throw collection not found");
+
+            Assert.ThrowsAsync<CacheException>(async () => _ =  await store.FeedCollection("persons", "001", items.ToAsyncEnumerable()), "should throw collection not found");
         }
 
 
         [Test]
-        public void FeedFirstVersionOfACollection()
+        public async Task FeedFirstVersionOfACollection()
         {
-            using var store = new DataStore(StoreName);
+            await using var store = new DataStore(StoreName);
 
             var items = new Item[] { new(new byte[100], 1, 200), new(new byte[1000], 2, 300) };
 
@@ -96,9 +101,10 @@ namespace UnitTests
 
             store.CreateCollection(new CollectionMetadata("persons", "id", "client_id"));
             
-            store.FeedCollection("persons", "001", items);
+            _ = await  store.FeedCollection("persons", "001", items.ToAsyncEnumerable());
 
             var collections  = store.GetCollections();
+            
             Assert.That(collections.Length, Is.EqualTo(1), "Store should have one collection after feeding first version");
             Assert.That(collections[0].Name, Is.EqualTo("persons"), "Collection name should match the one created");
             Assert.That(collections[0].LastVersion, Is.EqualTo("001"), "Last version should be '001' after first feed");
@@ -107,9 +113,9 @@ namespace UnitTests
         [Test]
         [TestCase(100, 1000)]
         [TestCase(2000, 5000)]
-        public void FeedTwoMillionItemsInCollection(int smallObjectSize, int largeObjectSize)
+        public async Task FeedTwoMillionItemsInCollection(int smallObjectSize, int largeObjectSize)
         {
-            using (var store = new DataStore(StoreName))
+            await using (var store = new DataStore(StoreName))
             {
 
                 byte[] data1 = new byte[1000];
@@ -128,7 +134,7 @@ namespace UnitTests
 
                 Stopwatch watch = Stopwatch.StartNew();
 
-                store.FeedCollection("persons", "v001", items);
+                _ =  await store.FeedCollection("persons", "v001", items.ToAsyncEnumerable());
 
                 var duration = watch.ElapsedMilliseconds;
 
@@ -144,7 +150,7 @@ namespace UnitTests
 
 
             // retrieve items by primary key
-            using (var store = new DataStore(StoreName))
+            await using (var store = new DataStore(StoreName))
             {
                 store.Open();
                 var collections = store.GetCollections();
@@ -157,21 +163,21 @@ namespace UnitTests
                 var item1001 = store.GetByPrimaryKey("persons", 1001);
 
                 Assert.That(item0, Is.Not.Null, "Item with id 0 should exist");
-                Assert.That(item0.Keys[0], Is.EqualTo(0));
+                Assert.That(item0!.Keys[0], Is.EqualTo(0));
                 Assert.That(item0.Data.Length, Is.EqualTo(1000), "Item with id 1000 should have data length of 1000");
 
                 Assert.That(item1000, Is.Not.Null, "Item with id 1000 should exist");
-                Assert.That(item1000.Data.Length, Is.EqualTo(1000), "Item with id 1000 should have data length of 1000");
+                Assert.That(item1000!.Data.Length, Is.EqualTo(1000), "Item with id 1000 should have data length of 1000");
 
                 Assert.That(item1001, Is.Not.Null, "Item with id 1001 should exist");
-                Assert.That(item1001.Keys[0], Is.EqualTo(1001));
+                Assert.That(item1001!.Keys[0], Is.EqualTo(1001));
                 Assert.That(item1001.Data.Length, Is.EqualTo(100), "Item with id 1000 should have data length of 1000");
 
 
                 // check for items in the second segment
                 var itemOther = store.GetByPrimaryKey("persons", 1_000_003);
                 Assert.That(itemOther, Is.Not.Null, "Item with id 1_000_003 should exist");
-                Assert.That(itemOther.Keys[0], Is.EqualTo(1_000_003));
+                Assert.That(itemOther!.Keys[0], Is.EqualTo(1_000_003));
 
 
                 Benchmark(() =>
