@@ -10,7 +10,7 @@ namespace CacheClient
 
         Stream? _stream;
 
-        public void Connect()
+        public bool Connect()
         {
             if (_client != null)
             {
@@ -21,7 +21,12 @@ namespace CacheClient
             _client.NoDelay = true; // Disable Nagle's algorithm for low latency
 
             _stream = _client.GetStream();
-            
+
+            if (_client.Connected)
+                return true;
+
+            return false;
+
         }
 
         public async Task CreateCollection(string collectionName, string primaryKey, params string[] otherIndexes)
@@ -95,6 +100,65 @@ namespace CacheClient
             {
                 throw new CacheException($"Unexpected response type: {response.GetType().Name}");
             }
+        }
+
+        /// <summary>
+        /// Query a collection by primary key. Multiple values of primary key may be specified
+        /// </summary>
+        /// <param name="collection"></param>
+        /// <param name="keyValues"></param>
+        /// <returns>Results as row data</returns>
+        public async Task<List<byte[]>> QueryByPrimaryKey(string collection, params long[] keyValues)
+        {
+            if (_client == null || _stream == null)
+            {
+                throw new InvalidOperationException("Not connected to server");
+            }
+
+            if (keyValues.Length == 0)
+                throw new ArgumentException("Value cannot be an empty collection.", nameof(keyValues));
+
+            var query = new QueryByPrimaryKey(collection, keyValues);
+            await _stream.WriteMessageAsync(query, CancellationToken.None);
+
+            List<byte[]> results = [];
+
+            bool stop = false;
+
+            while (!stop)
+            {
+                var response = await _stream.ReadMessageAsync(CancellationToken.None);
+                
+                if(response is ResultWithData queryResult)
+                {
+                    // no data in the end marker
+                    if (queryResult.IsEndMarker)
+                        break;
+
+                    foreach (var t in queryResult.ObjectsData)
+                    {
+                        results.Add(t);
+                    }
+
+                    if(queryResult.SingleAnswer)
+                        stop = true; // Single answer means we stop here
+                }
+                else if (response is StatusResponse status)
+                {
+                    if (!status.Success)
+                    {
+                        throw new CacheException($"Query failed: {status.ErrorMessage}");
+                    }
+                    stop = true; // End of query
+                }
+                else
+                {
+                    throw new CacheException($"Unexpected response type: {response.GetType().Name}");
+                }
+            }
+            
+            return results;
+
         }
 
         public void Dispose()

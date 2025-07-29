@@ -1,0 +1,13 @@
+﻿namespace Messages;
+
+public enum MessageType
+{
+    Ping = 1,
+    BeginFeedRequest = 2,
+    FeedItem = 3,
+    EndFeedRequest = 4,
+    CreateCollectionRequest = 5,
+    StatusResponse = 6,
+    QueryByPrimaryKeyRequest = 7,
+    QueryResponse = 8,
+}

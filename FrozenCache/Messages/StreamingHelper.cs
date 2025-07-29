@@ -36,6 +36,12 @@ public static class StreamingHelper
                 case MessageType.StatusResponse:
                     bytes = MessagePackSerializer.Serialize(message as StatusResponse);
                     break;
+                case MessageType.QueryByPrimaryKeyRequest:
+                    bytes = MessagePackSerializer.Serialize(message as QueryByPrimaryKey);
+                    break;
+                case MessageType.QueryResponse:
+                    bytes = MessagePackSerializer.Serialize(message as ResultWithData);
+                    break;
                 default:
                     throw new NotSupportedException("Unknown message type to stream");
             }
@@ -59,7 +65,7 @@ public static class StreamingHelper
             
     }
 
-    public static async Task<IMessage> ReadMessageAsync(this Stream stream, CancellationToken ct)
+    public static async Task<IMessage?> ReadMessageAsync(this Stream stream, CancellationToken ct)
     {
 
         var header = ArrayPool<byte>.Shared.Rent(8);
@@ -90,14 +96,26 @@ public static class StreamingHelper
                     MessageType.EndFeedRequest => MessagePackSerializer.Deserialize<EndFeedRequest>(buffer),
                     MessageType.CreateCollectionRequest => MessagePackSerializer.Deserialize<CreateCollectionRequest>(buffer),
                     MessageType.StatusResponse => MessagePackSerializer.Deserialize<StatusResponse>(buffer),
+                    MessageType.QueryByPrimaryKeyRequest => MessagePackSerializer.Deserialize<QueryByPrimaryKey>(buffer),
+                    MessageType.QueryResponse => MessagePackSerializer.Deserialize<ResultWithData>(buffer),
                     _ => throw new InvalidOperationException($"Unknown message type: {messageType}")
                 };
+            }
+            catch(Exception)
+            {
+                // connection closed, ignore
+                return null;
             }
             finally
             {
                 ArrayPool<byte>.Shared.Return(buffer);
             }
 
+        }
+        catch (Exception)
+        {
+            // connection closed, ignore
+            return null;
         }
         finally
         {

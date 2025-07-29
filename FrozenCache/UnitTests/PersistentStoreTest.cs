@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Text;
 using Messages;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
@@ -193,6 +194,82 @@ namespace UnitTests
 
 
 
+        }
+
+
+        [Test]
+        public async Task FeedMultipleCollectionsAndRetrieveData()
+        {
+            await using (var store = new DataStore(StoreName))
+            {
+                store.Open();
+
+                store.CreateCollection(new CollectionMetadata("first", "id", "name"));
+                store.CreateCollection(new CollectionMetadata("second", "id", "name"));
+                store.CreateCollection(new CollectionMetadata("third", "id", "name"));
+
+                var items1 = GenerateItemsWithCollectionInformation(1000, "first");
+                var items2 = GenerateItemsWithCollectionInformation(2000, "second");
+                var items3 = GenerateItemsWithCollectionInformation(3000, "third");
+                
+                _ = await store.FeedCollection("first", "v001", items1.ToAsyncEnumerable());
+                _ = await store.FeedCollection("second", "v001", items2.ToAsyncEnumerable());
+                _ = await store.FeedCollection("third", "v001", items3.ToAsyncEnumerable());
+                
+                var collections = store.GetCollections();
+                Assert.That(collections.Length, Is.EqualTo(3), "Store should have three collections after feeding");
+                Assert.That(collections[0].Name, Is.EqualTo("first"), "First collection should be 'first'");
+                Assert.That(collections[1].Name, Is.EqualTo("second"), "Second collection should be 'second'");
+                Assert.That(collections[2].Name, Is.EqualTo("third"), "Third collection should be 'third'");
+
+                var item1 = store.GetByPrimaryKey("first", 10);
+                Assert.That(item1, Is.Not.Null);
+                Assert.That(item1!.Keys.Length, Is.EqualTo(2));
+                Assert.That(item1!.Keys[0], Is.EqualTo(10));
+                var content = Encoding.UTF8.GetString(item1.Data);
+                Assert.That(content, Is.EqualTo("first"));
+
+                var item2 = store.GetByPrimaryKey("second", 101);
+                Assert.That(item2, Is.Not.Null);
+                Assert.That(item2!.Keys.Length, Is.EqualTo(2));
+                Assert.That(item2!.Keys[0], Is.EqualTo(101));
+                content = Encoding.UTF8.GetString(item2.Data);
+                Assert.That(content, Is.EqualTo("second"));
+
+            }
+
+            // reopen the store and check the data again
+            await using (var store = new DataStore(StoreName))
+            {
+                store.Open();
+
+                var item1 = store.GetByPrimaryKey("first", 10);
+                Assert.That(item1, Is.Not.Null);
+                Assert.That(item1!.Keys.Length, Is.EqualTo(2));
+                Assert.That(item1!.Keys[0], Is.EqualTo(10));
+                var content = Encoding.UTF8.GetString(item1.Data);
+                Assert.That(content, Is.EqualTo("first"));
+
+                var item2 = store.GetByPrimaryKey("second", 101);
+                Assert.That(item2, Is.Not.Null);
+                Assert.That(item2!.Keys.Length, Is.EqualTo(2));
+                Assert.That(item2!.Keys[0], Is.EqualTo(101));
+                content = Encoding.UTF8.GetString(item2.Data);
+                Assert.That(content, Is.EqualTo("second"));
+            }
+        }
+
+
+        private static List<Item> GenerateItemsWithCollectionInformation(int count, string collectionName)
+        {
+            var items = new List<Item>();
+            for (int i = 0; i < count; i++)
+            {
+                var data = Encoding.UTF8.GetBytes(collectionName);
+
+                items.Add(new Item(data, i, i*100));
+            }
+            return items;
         }
 
 

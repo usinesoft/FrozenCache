@@ -78,6 +78,9 @@ public class TcpServerTest
         var dataStore = new Mock<IDataStore>();
         dataStore.Setup(x => x.CreateCollection(It.IsAny<CollectionMetadata>(), It.IsAny<int>()));
 
+        dataStore.Setup(x => x.GetByPrimaryKey("test", 12)).Returns(new Item(new byte[121], 12));
+
+
         var logger = new Mock<ILogger<HostedTcpServer>>();
 
         // dynamic port for integration tests
@@ -102,6 +105,12 @@ public class TcpServerTest
         Console.WriteLine($"Fed 1000 items in {watch.ElapsedMilliseconds} ms");
 
         dataStore.Verify(x=>x.FeedCollection("testCollection","v1", It.IsAny<IAsyncEnumerable<Item>>()), Times.Once);
+
+        var result = await client.QueryByPrimaryKey("test", 12);
+        Assert.That(result, Is.Not.Null, "Result should not be null");
+        Assert.That(result.Count, Is.EqualTo(1), "One object should be returned");
+        Assert.That(result[0].Length, Is.EqualTo(121), "121 bytes of data were expected");
+        
     }
 
 

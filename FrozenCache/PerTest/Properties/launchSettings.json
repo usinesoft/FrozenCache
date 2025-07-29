@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "PerTest": {
+      "commandName": "Project",
+      "commandLineArgs": "feed"
+    }
+  }
+}

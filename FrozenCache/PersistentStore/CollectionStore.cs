@@ -203,7 +203,7 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
         var fileName = index.ToString("D4") + extension;
 
         var path = Path.Combine(StoragePath, fileName);
-        var newFile = MemoryMappedFile.CreateFromFile(path, FileMode.CreateNew, fileName, _binaryFileDataSize);
+        var newFile = MemoryMappedFile.CreateFromFile(path, FileMode.CreateNew, null, _binaryFileDataSize);
 
         _currentWriteView = newFile.CreateViewAccessor();
         _views.Add(_currentWriteView);

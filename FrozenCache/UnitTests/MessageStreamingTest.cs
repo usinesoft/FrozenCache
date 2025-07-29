@@ -15,8 +15,10 @@ public class MessageStreamingTest
         yield return new CreateCollectionRequest { PrimaryKeyName = "id", CollectionName = "persons", OtherIndexes = ["name"] };
         yield return new StatusResponse { Success = true};
         yield return new StatusResponse { Success = false, ErrorMessage = "very bad"};
+        yield return new QueryByPrimaryKey {CollectionName = "test", PrimaryKeyValues = [1,2,3]};
+        yield return new ResultWithData { CollectionName = "test", ObjectsData = [new byte[500], new byte[200]]};
 
-        
+
     }
 
     [Test]

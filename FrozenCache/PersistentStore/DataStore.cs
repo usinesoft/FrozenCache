@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using System.Text.Json.Serialization;
 using Messages;
 
 namespace PersistentStore;
@@ -34,7 +35,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         Directory.CreateDirectory(path);
 
         //metadata is stored as json in the collection root path
-        var json = JsonSerializer.Serialize(metadata);
+        var json = JsonSerializer.Serialize(metadata, AppJsonSerializerContext.Default.CollectionMetadata);
         File.WriteAllText(Path.Combine(path, "metadata.json"), json);
     }
 
@@ -50,7 +51,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
             var metadataPath = Path.Combine(dir, "metadata.json");
             if (!File.Exists(metadataPath)) throw new CacheException($"Metadata file not found in {dir}");
             var json = File.ReadAllText(metadataPath);
-            collections[i] = JsonSerializer.Deserialize<CollectionMetadata>(json) ??
+            collections[i] = JsonSerializer.Deserialize<CollectionMetadata>(json, AppJsonSerializerContext.Default.CollectionMetadata) ??
                              throw new CacheException("Failed to deserialize collection metadata");
 
             // get available versions
@@ -98,7 +99,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
             var metadataPath = Path.Combine(dir, "metadata.json");
             if (!File.Exists(metadataPath)) throw new CacheException($"Metadata file not found in {dir}");
             var json = File.ReadAllText(metadataPath);
-            var metadata = JsonSerializer.Deserialize<CollectionMetadata>(json) ??
+            var metadata = JsonSerializer.Deserialize<CollectionMetadata>(json, AppJsonSerializerContext.Default.CollectionMetadata) ??
                            throw new CacheException("Failed to deserialize collection metadata");
 
             var allVersionsDirectories = Directory.EnumerateDirectories(dir)
@@ -109,6 +110,13 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
             if (allVersionsDirectories.Count > 0)
                 _collectionStores[metadata.Name] =
                     new CollectionStore(allVersionsDirectories[^1], metadata.Indexes.Count);
+
+            string? lastVersion = allVersionsDirectories.Count > 0
+                ? Path.GetFileName(allVersionsDirectories[^1])
+                : null;
+
+            Notification?.Invoke(this, new NotificationEventArgs(
+                $"Collection '{metadata.Name}' opened with version last version {lastVersion}"));
         });
     }
 
@@ -132,7 +140,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
 
         var json = await File.ReadAllTextAsync(metadataPath);
 
-        var collectionMetadata = JsonSerializer.Deserialize<CollectionMetadata>(json) ??
+        var collectionMetadata = JsonSerializer.Deserialize<CollectionMetadata>(json, AppJsonSerializerContext.Default.CollectionMetadata) ??
                                  throw new CacheException("Failed to deserialize collection metadata");
 
         var versionPath = Path.Combine(path, newVersion);
@@ -167,4 +175,17 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
     {
         foreach (var collectionStore in _collectionStores.Values) collectionStore.Dispose();
     }
+
+    public event EventHandler<NotificationEventArgs> Notification; 
+
+    public class NotificationEventArgs(string message) : EventArgs
+    {
+        public string Message { get; } = message;
+    }
+}
+
+[JsonSerializable(typeof(CollectionMetadata))]
+internal partial class AppJsonSerializerContext : JsonSerializerContext
+{
+
 }

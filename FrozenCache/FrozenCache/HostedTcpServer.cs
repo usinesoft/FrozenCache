@@ -1,5 +1,7 @@
-﻿using System.Net;
+﻿using System.IO;
+using System.Net;
 using System.Net.Sockets;
+using System.Threading;
 using Messages;
 using Microsoft.Extensions.Options;
 using PersistentStore;
@@ -21,6 +23,8 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
     public  Task StartAsync(CancellationToken cancellationToken)
     {
         
+        Logger.LogInformation("Starting TCP server...");
+
         var ct = _cts.Token;
 
         try
@@ -38,7 +42,7 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
             Port = endpoint.Port;
 
-
+            Logger.LogInformation("Server started on port {Port}", Port);
 
 
             _ = Task.Run(async () =>
@@ -89,6 +93,12 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
                 var message = await stream.ReadMessageAsync(cancellationToken);
 
+                if(message == null)
+                {
+                    Logger.LogWarning("Client disconnected");
+                    break; // Client disconnected 
+                }
+
                 // The ping request is a special case, it has no data, so we can respond immediately
                 if (message is PingMessage ping)
                 {
@@ -105,12 +115,15 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
                     case CreateCollectionRequest createCollectionRequest:
                         await ProcessCreateCollection(createCollectionRequest, stream, cancellationToken);
                         break;
+                    case QueryByPrimaryKey queryRequest:
+                        await ProcessSimpleQuery(queryRequest, stream, cancellationToken);
+                        break;
                 }
                         
 
             }
 
-            Logger.LogWarning("Server stopped");
+
         }
         catch(OperationCanceledException)
         {
@@ -126,6 +139,38 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         {
             client.Close();
                     
+        }
+    }
+
+    private async Task ProcessSimpleQuery(QueryByPrimaryKey queryRequest, Stream stream, CancellationToken ct)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(queryRequest.CollectionName))
+                throw new CacheException("Collection name is required in QueryByPrimaryKey request");
+
+            var result = new ResultWithData{CollectionName = queryRequest.CollectionName};
+
+            List<byte[]> temp = new List<byte[]>();
+
+            foreach (var keyValue in queryRequest.PrimaryKeyValues)
+            {
+                var item = Store.GetByPrimaryKey(queryRequest.CollectionName, keyValue);
+                if(item != null)
+                {
+                    temp.Add(item.Data);
+                }
+            
+            }
+
+            result.ObjectsData = temp.ToArray();
+
+            result.SingleAnswer = true;
+            await stream.WriteMessageAsync(result, ct);
+        }
+        catch (Exception e)
+        {
+            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = e.Message }, ct);
         }
     }
 
