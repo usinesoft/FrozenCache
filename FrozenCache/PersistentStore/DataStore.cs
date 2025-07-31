@@ -125,7 +125,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         return _collectionStores[collectionName].GetByFirstKey(keyValue);
     }
 
-    public async Task<int> FeedCollection(string collectionName, string newVersion, IAsyncEnumerable<Item> items)
+    public int FeedCollection(string collectionName, string newVersion, IEnumerable<Item> items)
     {
         if (!_opened)
             throw new CacheException("DataStore is not opened. Call Open() before feeding collections.");
@@ -138,7 +138,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         var metadataPath = Path.Combine(path, "metadata.json");
         if (!File.Exists(metadataPath)) throw new CacheException($"Metadata file not found in {path}");
 
-        var json = await File.ReadAllTextAsync(metadataPath);
+        var json = File.ReadAllText(metadataPath);
 
         var collectionMetadata = JsonSerializer.Deserialize<CollectionMetadata>(json, AppJsonSerializerContext.Default.CollectionMetadata) ??
                                  throw new CacheException("Failed to deserialize collection metadata");
@@ -151,7 +151,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
             collectionMetadata.FileSize, collectionMetadata.MaxItemsInFile);
 
         int itemsCount = 0;
-        await foreach (var item in items)
+        foreach (var item in items)
         {
             collectionStore.StoreNewDocument(item);
             itemsCount++;
@@ -160,7 +160,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         collectionStore.EndOfFeed();
 
         // replace previous version if any
-        if (_collectionStores.TryGetValue(collectionName, out var store)) await store.DisposeAsync();
+        if (_collectionStores.TryGetValue(collectionName, out var store)) store.Dispose();
         _collectionStores[collectionName] = collectionStore;
 
         return itemsCount;
@@ -176,7 +176,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         foreach (var collectionStore in _collectionStores.Values) collectionStore.Dispose();
     }
 
-    public event EventHandler<NotificationEventArgs> Notification; 
+    public event EventHandler<NotificationEventArgs>? Notification; 
 
     public class NotificationEventArgs(string message) : EventArgs
     {

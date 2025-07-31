@@ -1,20 +1,22 @@
-﻿using System.IO;
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
-using System.Threading;
+using System.Text;
 using Messages;
 using Microsoft.Extensions.Options;
 using PersistentStore;
+using Serilog;
+using ILogger = Microsoft.Extensions.Logging.ILogger;
+
 #pragma warning disable S6667
 
 namespace FrozenCache;
 
-public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, IOptions<ServerSettings> connfiguration) : IHostedService
+public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, IOptions<ServerSettings> configuration) : IHostedService
 {
     public IDataStore Store { get; } = store;
     
-    public ILogger<HostedTcpServer> Logger { get; } = logger;
-    public IOptions<ServerSettings> Connfiguration { get; } = connfiguration;
+    public ILogger Logger { get; } = logger;
+    public IOptions<ServerSettings> Configuration { get; } = configuration;
 
     readonly CancellationTokenSource _cts = new();
 
@@ -29,7 +31,7 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
         try
         {
-            var listener = new TcpListener(IPAddress.Any, Connfiguration.Value.Port);
+            var listener = new TcpListener(IPAddress.Any, Configuration.Value.Port);
             listener.Server.NoDelay = true; // Disable Nagle's algorithm for low latency
             
             listener.Server.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only, 0);
@@ -53,6 +55,8 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
                     {
                         var client = await listener.AcceptTcpClientAsync(ct);
                         client.NoDelay = true; // Disable Nagle's algorithm for low latency
+                        //client.SendBufferSize = 1024 * 1024; // 1 MB send buffer
+                        //client.ReceiveBufferSize = 1024 * 1024; // 1 MB receive buffer
 
                         // client loop
                         _ = Task.Run(async () => { await ClientLoop(ct, client); }, ct);
@@ -115,6 +119,9 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
                     case CreateCollectionRequest createCollectionRequest:
                         await ProcessCreateCollection(createCollectionRequest, stream, cancellationToken);
                         break;
+                    case DropCollectionRequest dropCollectionRequest:
+                        await ProcessDropCollection(dropCollectionRequest, stream, cancellationToken);
+                        break;
                     case QueryByPrimaryKey queryRequest:
                         await ProcessSimpleQuery(queryRequest, stream, cancellationToken);
                         break;
@@ -139,6 +146,28 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         {
             client.Close();
                     
+        }
+    }
+
+    private async Task ProcessDropCollection(DropCollectionRequest dropCollectionRequest, NetworkStream stream, CancellationToken cancellationToken)
+    {
+        try
+        {
+            
+            if (string.IsNullOrWhiteSpace(dropCollectionRequest.CollectionName))
+                throw new ArgumentException("Collection name is empty");
+
+            Log.Information("Drop collection message received for collection {Collection}", dropCollectionRequest.CollectionName);
+
+            Store.DropCollection(dropCollectionRequest.CollectionName);
+            await stream.WriteMessageAsync(new StatusResponse(), cancellationToken);
+
+            Log.Information("Collection {Collection} was dropped", dropCollectionRequest.CollectionName);
+        }
+        catch (Exception e)
+        {
+            Logger.LogError("Error while dropping collection:{Message}", e.Message);
+            await stream.WriteMessageAsync(new StatusResponse{Success = false, ErrorMessage = e.Message}, cancellationToken);
         }
     }
 
@@ -202,23 +231,22 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
     }
 
 
-    static async IAsyncEnumerable<Item> ReadItems(Stream stream)
+    static IEnumerable<Item> ReadItems(Stream stream)
     {
+        var reader = new BinaryReader(stream, Encoding.UTF8, true);
+
         while (true)
         {
-            var msg = await stream.ReadMessageAsync(CancellationToken.None);
-            if (msg is FeedItem itemMessage)
-            {
-                yield return new Item(itemMessage.Data, itemMessage.Keys);
-            }
 
-            else if (msg is EndFeedRequest)
-            {
-                yield break;
-            }
+            var msg= FeedItem.Deserialize(reader);
+
+            if(msg.IsEndOfStream)
+                yield break; // End of stream
+
+            yield return new Item(msg.Data, msg.Keys);
+            
         }
         
-
     }
 
     private async Task ProcessFeedSession(BeginFeedRequest beginRequest, Stream stream)
@@ -233,7 +261,7 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         Logger.LogInformation("Begin feeding collection {Collection}. New version is {Version}", beginRequest.CollectionName, beginRequest.CollectionVersion);
 
         
-        await Store.FeedCollection(beginRequest.CollectionName, beginRequest.CollectionVersion, ReadItems(stream));
+        Store.FeedCollection(beginRequest.CollectionName, beginRequest.CollectionVersion, ReadItems(stream));
 
         await stream.WriteMessageAsync(new StatusResponse(), CancellationToken.None);
 

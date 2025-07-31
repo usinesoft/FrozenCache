@@ -109,10 +109,12 @@ namespace PerTest
             //watch.Stop();
             //Console.WriteLine($"Feeding 1000 items took {watch.ElapsedMilliseconds} ms");
 
+            await connector.DropCollection("big");
+
             await connector.CreateCollection("big", "id", "name");
 
             var watch = Stopwatch.StartNew();
-            await connector.FeedCollection("big", "v1", GetItems(2_000_000, 100, 500).ToAsyncEnumerable());
+            await connector.FeedCollection("big", "v1", GetItems(2_000_000, 100, 500));
 
             watch.Stop();
             Console.WriteLine($"Feeding two million items items took {watch.ElapsedMilliseconds} ms");

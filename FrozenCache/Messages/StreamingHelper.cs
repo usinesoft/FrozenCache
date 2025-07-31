@@ -1,46 +1,59 @@
 ﻿using System.Buffers;
 using MessagePack;
+#pragma warning disable S6966
 
 namespace Messages;
 
 public static class StreamingHelper
 {
+
+    [ThreadStatic]
+    static MemoryStream? _memoryStream;
+
+    [ThreadStatic]
+    static byte[]? _buffer;
+
     public static async Task WriteMessageAsync(this Stream stream, IMessage message, CancellationToken ct)
     {
+
+        if (_memoryStream == null)
+        {
+            _buffer = new byte[1024 * 1024];
+            _memoryStream = new MemoryStream(_buffer);
+        }
+        
+
+        _memoryStream.Seek(0, SeekOrigin.Begin);
 
         var header = ArrayPool<byte>.Shared.Rent(8);
         try
         {
 
-            byte[] bytes;
+            
 
             switch (message.Type)
             {
                 case MessageType.Ping:
                     // Ping is a special case, it has no data
-                    bytes = [];
                     break;
 
                 case MessageType.BeginFeedRequest:
-                    bytes = MessagePackSerializer.Serialize(message as BeginFeedRequest);
-                    break;
-                case MessageType.FeedItem:
-                    bytes = MessagePackSerializer.Serialize(message as FeedItem);
-                    break;
-                case MessageType.EndFeedRequest:
-                    bytes = MessagePackSerializer.Serialize(message as EndFeedRequest);
+                    MessagePackSerializer.Serialize(_memoryStream, message as BeginFeedRequest);
                     break;
                 case MessageType.CreateCollectionRequest:
-                    bytes = MessagePackSerializer.Serialize(message as CreateCollectionRequest);
+                    MessagePackSerializer.Serialize(_memoryStream, message as CreateCollectionRequest);
+                    break;
+                case MessageType.DropCollectionRequest:
+                    MessagePackSerializer.Serialize(_memoryStream, message as DropCollectionRequest);
                     break;
                 case MessageType.StatusResponse:
-                    bytes = MessagePackSerializer.Serialize(message as StatusResponse);
+                    MessagePackSerializer.Serialize(_memoryStream, message as StatusResponse);
                     break;
                 case MessageType.QueryByPrimaryKeyRequest:
-                    bytes = MessagePackSerializer.Serialize(message as QueryByPrimaryKey);
+                    MessagePackSerializer.Serialize(_memoryStream, message as QueryByPrimaryKey);
                     break;
                 case MessageType.QueryResponse:
-                    bytes = MessagePackSerializer.Serialize(message as ResultWithData);
+                    MessagePackSerializer.Serialize(_memoryStream, message as ResultWithData);
                     break;
                 default:
                     throw new NotSupportedException("Unknown message type to stream");
@@ -49,11 +62,14 @@ public static class StreamingHelper
             
 
             BitConverter.TryWriteBytes(header.AsSpan(0, 4), (int)message.Type);
-            BitConverter.TryWriteBytes(header.AsSpan(4, 4), bytes.Length);
+
+            var size = message.Type == MessageType.Ping? 0:(int)_memoryStream.Position;
+
+            BitConverter.TryWriteBytes(header.AsSpan(4, 4), size);
 
             // for rented arrays, we need to ensure we write the exact size
             await stream.WriteAsync(header.AsMemory(0,8), ct);
-            await stream.WriteAsync(bytes, ct);
+            await stream.WriteAsync(_buffer.AsMemory(0, size), ct);
 
 
 
@@ -65,7 +81,7 @@ public static class StreamingHelper
             
     }
 
-    public static async Task<IMessage?> ReadMessageAsync(this Stream stream, CancellationToken ct)
+    public static async ValueTask<IMessage?> ReadMessageAsync(this Stream stream, CancellationToken ct)
     {
 
         var header = ArrayPool<byte>.Shared.Rent(8);
@@ -92,9 +108,8 @@ public static class StreamingHelper
                     // ping is a special case (empty message)
                     MessageType.Ping => new PingMessage(),
                     MessageType.BeginFeedRequest => MessagePackSerializer.Deserialize<BeginFeedRequest>(buffer.AsMemory(0, size)),
-                    MessageType.FeedItem => MessagePackSerializer.Deserialize<FeedItem>(buffer),
-                    MessageType.EndFeedRequest => MessagePackSerializer.Deserialize<EndFeedRequest>(buffer),
                     MessageType.CreateCollectionRequest => MessagePackSerializer.Deserialize<CreateCollectionRequest>(buffer),
+                    MessageType.DropCollectionRequest => MessagePackSerializer.Deserialize<DropCollectionRequest>(buffer),
                     MessageType.StatusResponse => MessagePackSerializer.Deserialize<StatusResponse>(buffer),
                     MessageType.QueryByPrimaryKeyRequest => MessagePackSerializer.Deserialize<QueryByPrimaryKey>(buffer),
                     MessageType.QueryResponse => MessagePackSerializer.Deserialize<ResultWithData>(buffer),
@@ -133,7 +148,7 @@ public static class StreamingHelper
     /// <param name="ct"></param>
     /// <returns></returns>
     /// <exception cref="InvalidOperationException"></exception>
-    private static async Task ReadRawMessage(this Stream stream, byte[] buffer, int size, CancellationToken ct)
+    private static async ValueTask ReadRawMessage(this Stream stream, byte[] buffer, int size, CancellationToken ct)
     {
         int totalBytesRead = 0;
         

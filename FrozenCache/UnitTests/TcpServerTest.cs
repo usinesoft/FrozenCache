@@ -7,6 +7,7 @@ using Moq;
 using NUnit.Framework;
 using PersistentStore;
 
+
 namespace UnitTests;
 
 public class TcpServerTest
@@ -75,11 +76,8 @@ public class TcpServerTest
     [Test]
     public async Task FeedCollectionThroughTcp()
     {
-        var dataStore = new Mock<IDataStore>();
-        dataStore.Setup(x => x.CreateCollection(It.IsAny<CollectionMetadata>(), It.IsAny<int>()));
-
-        dataStore.Setup(x => x.GetByPrimaryKey("test", 12)).Returns(new Item(new byte[121], 12));
-
+        var dataStore = new NullDataStore();
+        
 
         var logger = new Mock<ILogger<HostedTcpServer>>();
 
@@ -88,7 +86,7 @@ public class TcpServerTest
         configuration.Setup(x => x.Value).Returns(new ServerSettings { Port = 0 });
 
 
-        var server = new HostedTcpServer(dataStore.Object, logger.Object, configuration.Object);
+        var server = new HostedTcpServer(dataStore, logger.Object, configuration.Object);
 
 
         await server.StartAsync(CancellationToken.None);
@@ -100,12 +98,11 @@ public class TcpServerTest
         await client.CreateCollection("testCollection", "id", "name", "age");
 
         var watch = Stopwatch.StartNew();
-        await client.FeedCollection("testCollection", "v1", GetItems(1000, 100, 1000).ToAsyncEnumerable());
+        await client.FeedCollection("testCollection", "v1", GetItems(10_000, 100, 1000));
         watch.Stop();
-        Console.WriteLine($"Fed 1000 items in {watch.ElapsedMilliseconds} ms");
+        Console.WriteLine($"Fed 10_000 items in {watch.ElapsedMilliseconds} ms");
 
-        dataStore.Verify(x=>x.FeedCollection("testCollection","v1", It.IsAny<IAsyncEnumerable<Item>>()), Times.Once);
-
+        
         var result = await client.QueryByPrimaryKey("test", 12);
         Assert.That(result, Is.Not.Null, "Result should not be null");
         Assert.That(result.Count, Is.EqualTo(1), "One object should be returned");

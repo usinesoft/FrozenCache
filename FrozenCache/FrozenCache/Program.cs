@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using PersistentStore;
+using Serilog;
 
 namespace FrozenCache;
 
@@ -19,7 +20,20 @@ internal static class Program
 
         store.Open();
 
+        ////////////////////////////////
+        // Dependency injection
+
         var builder = WebApplication.CreateSlimBuilder(args);
+
+        builder.Host.UseSerilog((context, configuration) =>
+            configuration.MinimumLevel.Information()
+                .MinimumLevel.Override("Microsoft", Serilog.Events.LogEventLevel.Information)
+                .MinimumLevel.Override("System", Serilog.Events.LogEventLevel.Information)
+                .Enrich.FromLogContext()
+                .WriteTo.Console()
+                .WriteTo.File("logs/log.txt", rollingInterval: RollingInterval.Day, retainedFileCountLimit: 7)
+            );
+        
 
         builder.Services.ConfigureHttpJsonOptions(options =>
         {

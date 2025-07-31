@@ -81,13 +81,13 @@ namespace UnitTests
 
             var items = new Item[] { new(new byte[100], 1, 200), new(new byte[1000], 2, 300) };
  
-            Assert.ThrowsAsync<CacheException>(
-                async  () => _ = await store.FeedCollection("persons", "001", items.ToAsyncEnumerable()),
+            Assert.Throws<CacheException>(
+                () => _ = store.FeedCollection("persons", "001", items),
                 "should throw store not opened");
 
             store.Open();
 
-            Assert.ThrowsAsync<CacheException>(async () => _ =  await store.FeedCollection("persons", "001", items.ToAsyncEnumerable()), "should throw collection not found");
+            Assert.Throws<CacheException>(() => _ =  store.FeedCollection("persons", "001", items), "should throw collection not found");
         }
 
 
@@ -102,7 +102,7 @@ namespace UnitTests
 
             store.CreateCollection(new CollectionMetadata("persons", "id", "client_id"));
             
-            _ = await  store.FeedCollection("persons", "001", items.ToAsyncEnumerable());
+            _ = store.FeedCollection("persons", "001", items);
 
             var collections  = store.GetCollections();
             
@@ -135,7 +135,7 @@ namespace UnitTests
 
                 Stopwatch watch = Stopwatch.StartNew();
 
-                _ =  await store.FeedCollection("persons", "v001", items.ToAsyncEnumerable());
+                _ =  store.FeedCollection("persons", "v001", items);
 
                 var duration = watch.ElapsedMilliseconds;
 
@@ -212,9 +212,9 @@ namespace UnitTests
                 var items2 = GenerateItemsWithCollectionInformation(2000, "second");
                 var items3 = GenerateItemsWithCollectionInformation(3000, "third");
                 
-                _ = await store.FeedCollection("first", "v001", items1.ToAsyncEnumerable());
-                _ = await store.FeedCollection("second", "v001", items2.ToAsyncEnumerable());
-                _ = await store.FeedCollection("third", "v001", items3.ToAsyncEnumerable());
+                _ = store.FeedCollection("first", "v001", items1);
+                _ = store.FeedCollection("second", "v001", items2);
+                _ = store.FeedCollection("third", "v001", items3);
                 
                 var collections = store.GetCollections();
                 Assert.That(collections.Length, Is.EqualTo(3), "Store should have three collections after feeding");
