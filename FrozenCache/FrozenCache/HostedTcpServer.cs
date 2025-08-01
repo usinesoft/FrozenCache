@@ -238,12 +238,16 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         while (true)
         {
 
-            var msg= FeedItem.Deserialize(reader);
+            var msgs= FeedItem.DeserializeBatch(reader);
 
-            if(msg.IsEndOfStream)
+            if(msgs.Count == 0) 
                 yield break; // End of stream
 
-            yield return new Item(msg.Data, msg.Keys);
+            foreach (var msg in msgs)
+            {
+             
+                yield return new Item(msg.Data, msg.Keys);
+            }
             
         }
         

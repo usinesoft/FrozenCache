@@ -1,4 +1,5 @@
-﻿using System.Net.Sockets;
+﻿using System.Buffers;
+using System.Net.Sockets;
 using System.Text;
 using Messages;
 using PersistentStore;
@@ -63,6 +64,10 @@ public sealed class Connector(string host, int port) : IDisposable
 
         var writer = new BinaryWriter(_stream, Encoding.UTF8, true);
 
+        // Prepare the batch of items to feed
+        FeedItem[] batch = ArrayPool<FeedItem>.Shared.Rent(100);
+
+        int batchSize = 0;
         foreach (var item in items)
         {
             var feedItem = new FeedItem
@@ -71,14 +76,28 @@ public sealed class Connector(string host, int port) : IDisposable
                 Keys = item.Keys
             };
 
-            feedItem.Serialize(writer);
+            batch[batchSize++] = feedItem;
+            if (batchSize >= 100)
+            {
+                FeedItem.SerializeBatchOfItems(batch.AsSpan(0, batchSize), writer);
+                batchSize = 0;
+            }
+
         }
 
-        // write an empty item to mark the end of stream
-        new FeedItem().Serialize(writer);
+        // Write any remaining items in the batch
+        FeedItem.SerializeBatchOfItems(batch.AsSpan(0, batchSize), writer);
+
+        if (batchSize != 0)// if the last one was not empty, we need to write an end marker
+        {
+            // write an empty batch to mark the end of stream
+            FeedItem.SerializeBatchOfItems(Array.Empty<FeedItem>(), writer);
+        }
+        
 
         var response = await _stream.ReadMessageAsync(CancellationToken.None);
 
+        ArrayPool<FeedItem>.Shared.Return(batch);
 
         if (response is StatusResponse status)
         {
