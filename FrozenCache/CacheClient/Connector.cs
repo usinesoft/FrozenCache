@@ -12,6 +12,8 @@ public sealed class Connector(string host, int port) : IDisposable
 
     private Stream? _stream;
 
+    private readonly FeedItemBatchSerializer _batchSerializer = new();
+
     public bool Connect()
     {
         if (_client != null) throw new InvalidOperationException("Already connected");
@@ -65,7 +67,7 @@ public sealed class Connector(string host, int port) : IDisposable
         var writer = new BinaryWriter(_stream, Encoding.UTF8, true);
 
         // Prepare the batch of items to feed
-        FeedItem[] batch = ArrayPool<FeedItem>.Shared.Rent(100);
+        FeedItem[] batch = ArrayPool<FeedItem>.Shared.Rent(1000);
 
         int batchSize = 0;
         foreach (var item in items)
@@ -77,21 +79,21 @@ public sealed class Connector(string host, int port) : IDisposable
             };
 
             batch[batchSize++] = feedItem;
-            if (batchSize >= 100)
+            if (batchSize >= 1000)
             {
-                FeedItem.SerializeBatchOfItems(batch.AsSpan(0, batchSize), writer);
+                _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize), 1_000_000);
                 batchSize = 0;
             }
 
         }
 
         // Write any remaining items in the batch
-        FeedItem.SerializeBatchOfItems(batch.AsSpan(0, batchSize), writer);
+        _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize));
 
-        if (batchSize != 0)// if the last one was not empty, we need to write an end marker
+        if (batchSize != 0)// if the last one was not empty, we need to write an empty batch as end marker
         {
             // write an empty batch to mark the end of stream
-            FeedItem.SerializeBatchOfItems(Array.Empty<FeedItem>(), writer);
+            _batchSerializer.Serialize(writer, Array.Empty<FeedItem>());
         }
         
 

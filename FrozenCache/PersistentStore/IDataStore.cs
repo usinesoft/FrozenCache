@@ -46,5 +46,15 @@ public interface IDataStore
     /// <param name="items"></param>
     public int FeedCollection(string collectionName, string newVersion, IEnumerable<Item> items);
 
+
+    /// <summary>
+    /// Async version of FeedCollection.
+    /// </summary>
+    /// <param name="collectionName"></param>
+    /// <param name="newVersion"></param>
+    /// <param name="items"></param>
+    /// <returns></returns>
+    public Task<int> FeedCollectionAsync(string collectionName, string newVersion, IAsyncEnumerable<Item> items);
+
 }
 

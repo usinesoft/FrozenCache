@@ -43,24 +43,41 @@ public class MessageStreamingTest
     [Test]
     public void TestFeedItemMessageStreaming()
     {
-        var feedItem = new FeedItem
+
+
+        FeedItem[] messages = new FeedItem[1000];
+        for (int i = 0; i < 1000; i++)
         {
-            Data = new byte[100],
-            Keys = [1, 2]
-        };
+            messages[i] = new FeedItem
+            {
+                Data = new byte[100],
+                Keys = [i, i + 1]
+            };
+        }
 
         var stream = new MemoryStream();
-        
-        feedItem.Serialize(new BinaryWriter(stream, Encoding.UTF8, true));
-        stream.Seek(0, SeekOrigin.Begin);
-        var readItem = FeedItem.Deserialize(new BinaryReader(stream, Encoding.UTF8, true));
-        Assert.That(readItem, Is.Not.Null);
-        Assert.That(readItem.Data.Length, Is.EqualTo(feedItem.Data.Length));
-        Assert.That(readItem.Keys.Length, Is.EqualTo(feedItem.Keys.Length));
-        Assert.That(readItem.Data, Is.EqualTo(feedItem.Data));
-        Assert.That(readItem.Keys, Is.EqualTo(feedItem.Keys));
-        Assert.That(readItem.ToString(), Is.EqualTo(feedItem.ToString()));
 
+        var batchSerializer = new FeedItemBatchSerializer();
+
+        var batches = batchSerializer.Serialize(new BinaryWriter(stream, Encoding.UTF8, true), messages.AsSpan(), 50_000);
+
+        Assert.That(batches, Is.GreaterThan(1), "Must have been divided in multiple batches as the buffer size is too small");
+
+        stream.Seek(0, SeekOrigin.Begin);
+
+        var count = 0;
+
+        while (true)
+        {
+            var items = batchSerializer.Deserialize(new BinaryReader(stream, Encoding.UTF8, true));
+            count += items.Count;
+            if (items.Count == 0)
+                break;
+        }
+        
+        
+        Assert.That(count, Is.EqualTo(1000));
+        
 
     }
 

@@ -1,5 +1,7 @@
 ﻿using System.Diagnostics;
+using System.Globalization;
 using CacheClient;
+using Humanizer;
 using PersistentStore;
 #pragma warning disable S112
 
@@ -10,6 +12,10 @@ namespace PerTest
         static async Task Main(string[] args)
         {
             string action = args.Length > 0 ? args[0] : "read";
+
+            int count = args.Length > 1 ? int.Parse(args[1]) : 2_000_000;
+
+            string? version = args.Length > 2 ? args[2] : null;
 
             Console.WriteLine($"Action:{action}");
 
@@ -25,11 +31,11 @@ namespace PerTest
 
             if (action == "feed")
             {
-                await FeedData(connector);
+                await FeedData(connector, count, version);
             }
             else
             {
-                await ReadData(connector);
+                await ReadData(connector, count);
             }
 
 
@@ -37,36 +43,43 @@ namespace PerTest
 
 
 
-        private static async Task ReadData(Connector connector)
+        private static async Task ReadData(Connector connector, int maxId)
         {
-            await QueryByBatch(connector, 1, 100);
+            await QueryByBatch(connector, 1, 100, maxId);
             var watch = Stopwatch.StartNew();
-            await QueryByBatch(connector, 1, 100);
+            await QueryByBatch(connector, 1, 100, maxId);
             watch.Stop();
             Console.WriteLine($"Reading 100 objects one by one took {watch.ElapsedMilliseconds} ms");
 
-            await QueryByBatch(connector, 5, 100);
+            await QueryByBatch(connector, 5, 100, maxId);
             watch = Stopwatch.StartNew();
-            await QueryByBatch(connector, 5, 100);
+            await QueryByBatch(connector, 5, 100, maxId);
             watch.Stop();
             Console.WriteLine($"Reading 100 times 5 objects took {watch.ElapsedMilliseconds} ms");
 
-            await QueryByBatch(connector, 10, 100);
+            await QueryByBatch(connector, 10, 100, maxId);
             watch = Stopwatch.StartNew();
-            await QueryByBatch(connector, 10, 100);
+            await QueryByBatch(connector, 10, 100, maxId);
             watch.Stop();
             Console.WriteLine($"Reading 100 times 10 objects took {watch.ElapsedMilliseconds} ms");
 
-            await QueryByBatch(connector, 100, 100);
+            await QueryByBatch(connector, 100, 100, maxId);
             watch = Stopwatch.StartNew();
-            await QueryByBatch(connector, 100, 100);
+            await QueryByBatch(connector, 100, 100, maxId);
             watch.Stop();
             Console.WriteLine($"Reading 100 times 100 objects took {watch.ElapsedMilliseconds} ms");
         }
 
-        private static async Task QueryByBatch(Connector connector, int batchSize, int iterations)
+        private static async Task QueryByBatch(Connector connector, int batchSize, int iterations, int maxId)
         {
-            long[] ids = Enumerable.Range(0, batchSize).Select(x=> (long)x*10).ToArray();
+            Random random = new Random();
+            
+            long[] ids = new long[batchSize];
+
+            for (int i = 0; i < batchSize; i++)
+                ids[i] = random.NextInt64(2_000_000);
+
+
             var watch = Stopwatch.StartNew();
             for (int i = 0; i < iterations; i++)
             {
@@ -92,32 +105,24 @@ namespace PerTest
             }
         }
 
-        private static async Task FeedData(Connector connector)
+        private static async Task FeedData(Connector connector, int count, string? version)
         {
-            //try
-            //{
-            //    await connector.CreateCollection("test", "id", "name");
-            //}
-            //catch (Exception )
-            //{
-            //    // Ignore if collection already exists
-            //}
 
-            //var watch = Stopwatch.StartNew();
-            //await connector.FeedCollection("test", "v1", GetItems(1000, 100, 500).ToAsyncEnumerable());
+            if (string.IsNullOrWhiteSpace(version))
+            {
+                await connector.DropCollection("big");
 
-            //watch.Stop();
-            //Console.WriteLine($"Feeding 1000 items took {watch.ElapsedMilliseconds} ms");
+                await connector.CreateCollection("big", "id", "name");
+            }
 
-            await connector.DropCollection("big");
+            version ??= "v1";
 
-            await connector.CreateCollection("big", "id", "name");
 
             var watch = Stopwatch.StartNew();
-            await connector.FeedCollection("big", "v1", GetItems(2_000_000, 100, 500));
+            await connector.FeedCollection("big", version, GetItems(count, 100, 500));
 
             watch.Stop();
-            Console.WriteLine($"Feeding two million items items took {watch.ElapsedMilliseconds} ms");
+            Console.WriteLine($"Feeding {count} items items took {watch.ElapsedMilliseconds} ms");
 
         }
     }

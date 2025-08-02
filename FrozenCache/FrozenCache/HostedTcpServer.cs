@@ -1,6 +1,7 @@
 ﻿using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading.Channels;
 using Messages;
 using Microsoft.Extensions.Options;
 using PersistentStore;
@@ -20,10 +21,14 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
     readonly CancellationTokenSource _cts = new();
 
+    private Channel<FeedItem>? _internalChannel;
     public int Port { get; private set; }
+
+    private readonly FeedItemBatchSerializer _batchSerializer = new();
 
     public  Task StartAsync(CancellationToken cancellationToken)
     {
+
         
         Logger.LogInformation("Starting TCP server...");
 
@@ -55,8 +60,7 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
                     {
                         var client = await listener.AcceptTcpClientAsync(ct);
                         client.NoDelay = true; // Disable Nagle's algorithm for low latency
-                        //client.SendBufferSize = 1024 * 1024; // 1 MB send buffer
-                        //client.ReceiveBufferSize = 1024 * 1024; // 1 MB receive buffer
+                        
 
                         // client loop
                         _ = Task.Run(async () => { await ClientLoop(ct, client); }, ct);
@@ -231,22 +235,21 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
     }
 
 
-    static IEnumerable<Item> ReadItems(Stream stream)
+    IEnumerable<FeedItem> ReadItems(Stream stream)
     {
         var reader = new BinaryReader(stream, Encoding.UTF8, true);
 
         while (true)
         {
 
-            var msgs= FeedItem.DeserializeBatch(reader);
+            var msgs= _batchSerializer.Deserialize(reader);
 
             if(msgs.Count == 0) 
                 yield break; // End of stream
 
             foreach (var msg in msgs)
             {
-             
-                yield return new Item(msg.Data, msg.Keys);
+                yield return msg;
             }
             
         }
@@ -264,8 +267,22 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
         Logger.LogInformation("Begin feeding collection {Collection}. New version is {Version}", beginRequest.CollectionName, beginRequest.CollectionVersion);
 
+        var feederTask = StartCollectionFeeder(beginRequest.CollectionName, beginRequest.CollectionVersion);
+
+        _internalChannel = Channel.CreateBounded<FeedItem>(1_000_000);
+
+        foreach (var item in ReadItems(stream))
+        {
+            await _internalChannel!.Writer.WriteAsync(item, CancellationToken.None);
+        }
         
-        Store.FeedCollection(beginRequest.CollectionName, beginRequest.CollectionVersion, ReadItems(stream));
+        _internalChannel.Writer.Complete();
+
+        await feederTask;
+
+        
+
+        Logger.LogInformation("Feeding collection {Collection} completed", beginRequest.CollectionName);
 
         await stream.WriteMessageAsync(new StatusResponse(), CancellationToken.None);
 
@@ -281,6 +298,27 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
         await Task.Delay(200, cancellationToken);
 
-
     }
+
+    async IAsyncEnumerable<Item> ItemsFromChannel()
+    {
+        if (_internalChannel == null)
+            throw new InvalidOperationException("Internal channel is not initialized");
+
+        await foreach (var item in _internalChannel.Reader.ReadAllAsync())
+        {
+            yield return new Item(item.Data, item.Keys);
+        }
+    }
+
+    private Task StartCollectionFeeder(string collectionName, string collectionVersion)
+    {
+        var task = Task.Run(async () =>
+        {
+            await Store.FeedCollectionAsync(collectionName, collectionVersion, ItemsFromChannel());
+        });
+
+        return task;
+    }
+
 }

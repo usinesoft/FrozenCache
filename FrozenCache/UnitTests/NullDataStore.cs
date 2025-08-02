@@ -50,4 +50,21 @@ public class NullDataStore : IDataStore
 
         return count;
     }
+
+    public async Task<int> FeedCollectionAsync(string collectionName, string newVersion, IAsyncEnumerable<Item> items)
+    {
+        var watch = Stopwatch.StartNew();
+
+        int count = 0;
+        await foreach (var item in items)
+        {
+            count++;
+        }
+
+        watch.Stop();
+
+        Console.WriteLine($"Read {count} items in {watch.ElapsedMilliseconds} ms");
+
+        return count;
+    }
 }

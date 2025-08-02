@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Collections;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Messages;
 
@@ -125,7 +126,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         return _collectionStores[collectionName].GetByFirstKey(keyValue);
     }
 
-    public int FeedCollection(string collectionName, string newVersion, IEnumerable<Item> items)
+    public CollectionStore BeginFeed(string collectionName, string newVersion)
     {
         if (!_opened)
             throw new CacheException("DataStore is not opened. Call Open() before feeding collections.");
@@ -150,6 +151,26 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         var collectionStore = new CollectionStore(versionPath, collectionMetadata.Indexes.Count,
             collectionMetadata.FileSize, collectionMetadata.MaxItemsInFile);
 
+        return collectionStore;
+    }
+
+    public void EndFeed(CollectionStore collectionStore, string collectionName)
+    {
+        if (collectionStore == null) throw new ArgumentNullException(nameof(collectionStore));
+
+        // create indexes
+        collectionStore.EndOfFeed();
+
+        // replace previous version if any
+        if (_collectionStores.TryGetValue(collectionName, out var store)) store.Dispose();
+        _collectionStores[collectionName] = collectionStore;
+
+    }
+
+    public int FeedCollection(string collectionName, string newVersion, IEnumerable<Item> items)
+    {
+        var collectionStore = BeginFeed(collectionName, newVersion);
+
         int itemsCount = 0;
         foreach (var item in items)
         {
@@ -157,11 +178,23 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
             itemsCount++;
         }
 
-        collectionStore.EndOfFeed();
+        EndFeed(collectionStore, collectionName);
 
-        // replace previous version if any
-        if (_collectionStores.TryGetValue(collectionName, out var store)) store.Dispose();
-        _collectionStores[collectionName] = collectionStore;
+        return itemsCount;
+    }
+
+    public async Task<int> FeedCollectionAsync(string collectionName, string newVersion, IAsyncEnumerable<Item> items)
+    {
+        var collectionStore = BeginFeed(collectionName, newVersion);
+
+        int itemsCount = 0;
+        await foreach (var item in items)
+        {
+            collectionStore.StoreNewDocument(item);
+            itemsCount++;
+        }
+
+        EndFeed(collectionStore, collectionName);
 
         return itemsCount;
     }
