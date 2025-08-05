@@ -11,7 +11,7 @@ public class NullDataStore : IDataStore
 
     public CollectionMetadata[] GetCollections()
     {
-        throw new NotImplementedException();
+        return [new CollectionMetadata("testCollection", "id"){LastVersion = null}];
     }
 
     public void DropCollection(string name)

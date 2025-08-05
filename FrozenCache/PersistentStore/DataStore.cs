@@ -117,7 +117,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
                 : null;
 
             Notification?.Invoke(this, new NotificationEventArgs(
-                $"Collection '{metadata.Name}' opened with version last version {lastVersion}"));
+                $"Collection '{metadata.Name}' opened with last version {lastVersion}"));
         });
     }
 

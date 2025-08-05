@@ -6,6 +6,7 @@ using Messages;
 using Microsoft.Extensions.Options;
 using PersistentStore;
 using Serilog;
+using static System.String;
 using ILogger = Microsoft.Extensions.Logging.ILogger;
 
 #pragma warning disable S6667
@@ -92,9 +93,9 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
     private async Task ClientLoop(CancellationToken cancellationToken, TcpClient client)
     {
+        await using var stream = client.GetStream();
         try
         {
-            await using var stream = client.GetStream();
 
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -130,26 +131,31 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
                         await ProcessSimpleQuery(queryRequest, stream, cancellationToken);
                         break;
                 }
-                        
-
+                
             }
-
 
         }
         catch(OperationCanceledException)
         {
             // Client disconnected or operation was cancelled
             Logger.LogWarning("Cancellation requested");
+            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = "Operation cancelled" }, cancellationToken);
+            
+        }
+        catch(CacheException cacheEx)
+        {
+            Logger.LogError("Cache error processing client request: {Message}", cacheEx.Message);
+            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = cacheEx.Message }, cancellationToken);
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Error processing client request: {Message}", ex.Message);
-
+            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = ex.Message }, cancellationToken);
         }
         finally
         {
+            stream.Close();
             client.Close();
-                    
         }
     }
 
@@ -158,7 +164,7 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         try
         {
             
-            if (string.IsNullOrWhiteSpace(dropCollectionRequest.CollectionName))
+            if (IsNullOrWhiteSpace(dropCollectionRequest.CollectionName))
                 throw new ArgumentException("Collection name is empty");
 
             Log.Information("Drop collection message received for collection {Collection}", dropCollectionRequest.CollectionName);
@@ -179,7 +185,7 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(queryRequest.CollectionName))
+            if (IsNullOrWhiteSpace(queryRequest.CollectionName))
                 throw new CacheException("Collection name is required in QueryByPrimaryKey request");
 
             var result = new ResultWithData{CollectionName = queryRequest.CollectionName};
@@ -211,7 +217,7 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(createRequest.PrimaryKeyName))
+            if (IsNullOrWhiteSpace(createRequest.PrimaryKeyName))
             {
                 throw new CacheException("Primary key name is mandatory in CreateCollection request");
             }
@@ -230,7 +236,6 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         catch (Exception e)
         {
             await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = e.Message }, ct);
-
         }
     }
 
@@ -259,32 +264,63 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
     private async Task ProcessFeedSession(BeginFeedRequest beginRequest, Stream stream)
     {
 
-        if (string.IsNullOrWhiteSpace(beginRequest.CollectionName))
-            throw new CacheException("Collection name is required");
-
-        if (string.IsNullOrWhiteSpace(beginRequest.CollectionVersion))
-            throw new CacheException("Collection version is required");
-
-        Logger.LogInformation("Begin feeding collection {Collection}. New version is {Version}", beginRequest.CollectionName, beginRequest.CollectionVersion);
-
-        var feederTask = StartCollectionFeeder(beginRequest.CollectionName, beginRequest.CollectionVersion);
-
-        _internalChannel = Channel.CreateBounded<FeedItem>(1_000_000);
-
-        foreach (var item in ReadItems(stream))
+        try
         {
-            await _internalChannel!.Writer.WriteAsync(item, CancellationToken.None);
+            if (IsNullOrWhiteSpace(beginRequest.CollectionName))
+                throw new CacheException("Collection name is required");
+
+            if (IsNullOrWhiteSpace(beginRequest.CollectionVersion))
+                throw new CacheException("Collection version is required");
+
+            var collectionName = beginRequest.CollectionName;
+            var collectionVersion = beginRequest.CollectionVersion;
+
+            var collections = Store.GetCollections();
+            if (collections.All(c => c.Name != collectionName))
+            {
+                throw new CacheException($"Collection {collectionName} does not exist");
+            }
+
+            var oldVersion = collections.FirstOrDefault(c => c.Name == collectionName)?.LastVersion;
+            if (oldVersion == collectionVersion)
+            {
+                throw new CacheException($"Collection {collectionName} already has version {collectionVersion}");
+            }
+
+            if (oldVersion != null && Compare(oldVersion, collectionVersion, StringComparison.InvariantCultureIgnoreCase) > 0)
+            {
+                throw new CacheException($"Collection {collectionName} already has a newer version {oldVersion}");
+            }
+
+            // If we reach this point, we can start the feeding process. Let the client know about it
+            await stream.WriteMessageAsync(new StatusResponse(), CancellationToken.None);
+
+            Logger.LogInformation("Begin feeding collection {Collection}. New version is {Version}", beginRequest.CollectionName, beginRequest.CollectionVersion);
+
+            var feederTask = StartCollectionFeeder(beginRequest.CollectionName, beginRequest.CollectionVersion);
+
+
+            _internalChannel = Channel.CreateBounded<FeedItem>(1_000_000);
+
+            foreach (var item in ReadItems(stream))
+            {
+                await _internalChannel!.Writer.WriteAsync(item, CancellationToken.None);
+            }
+        
+            _internalChannel.Writer.Complete();
+
+            await feederTask;
+
+            Logger.LogInformation("Feeding collection {Collection} completed", beginRequest.CollectionName);
+
+            await stream.WriteMessageAsync(new StatusResponse(), CancellationToken.None);
+
         }
-        
-        _internalChannel.Writer.Complete();
-
-        await feederTask;
-
-        
-
-        Logger.LogInformation("Feeding collection {Collection} completed", beginRequest.CollectionName);
-
-        await stream.WriteMessageAsync(new StatusResponse(), CancellationToken.None);
+        catch (Exception e)
+        {
+            Logger.LogError("Error while processing feed session for collection {Collection} {Version}: {Message}", beginRequest.CollectionName, beginRequest.CollectionVersion,  e.Message);
+            await stream.WriteMessageAsync(new StatusResponse{ErrorMessage = e.Message, Success = false}, CancellationToken.None);
+        }
 
     }
 
@@ -313,9 +349,18 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
     private Task StartCollectionFeeder(string collectionName, string collectionVersion)
     {
+        
+
         var task = Task.Run(async () =>
         {
-            await Store.FeedCollectionAsync(collectionName, collectionVersion, ItemsFromChannel());
+            try
+            {
+                await Store.FeedCollectionAsync(collectionName, collectionVersion, ItemsFromChannel());
+            }
+            catch (Exception e)
+            {
+                Logger.LogError(e, "Error while feeding collection {Collection}: {Message}", collectionName, e.Message);
+            }
         });
 
         return task;

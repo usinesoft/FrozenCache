@@ -12,13 +12,7 @@ internal static class Program
         // create or open the datastore before application starts
         var store = new DataStore("data");
 
-        store.Notification += (sender, eventArgs) =>
-        {
-            Console.WriteLine($"{eventArgs.Message} at {DateTime.Now}");
-        };
-
-
-        store.Open();
+        
 
         ////////////////////////////////
         // Dependency injection
@@ -50,7 +44,17 @@ internal static class Program
 
         var app = builder.Build();
 
-        
+
+        var logger = app.Services.GetService<ILogger<DataStore>>();
+
+        store.Notification += (sender, eventArgs) =>
+        {
+            logger?.LogInformation("{Message}", eventArgs.Message);
+        };
+
+
+        store.Open();
+
         var sampleTodos = new Todo[] {
             new(1, "Walk the dog"),
             new(2, "Do the dishes", DateOnly.FromDateTime(DateTime.Now)),

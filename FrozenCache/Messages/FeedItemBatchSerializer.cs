@@ -9,7 +9,7 @@ namespace Messages;
 public class FeedItemBatchSerializer : IBatchSerializer<FeedItem>
 {
     private readonly FeedItemSerializer _serializer = new();
-    public int Serialize(BinaryWriter writer, Span<FeedItem> items, int maxBatchSizeInBytes = 100_000)
+    public int Serialize(BinaryWriter writer, Span<FeedItem> items, int maxBatchSizeInBytes = 1_000_000)
     {
         
 
@@ -59,10 +59,10 @@ public class FeedItemBatchSerializer : IBatchSerializer<FeedItem>
             batches += lastBatchSize;
         }
 
-        if (lastBatchSize != 0)
-        {
-            Serialize(writer, Array.Empty<FeedItem>()); // Write an empty batch to mark the end of stream
-        }
+        //if (lastBatchSize != 0)
+        //{
+        //    Serialize(writer, Array.Empty<FeedItem>()); // Write an empty batch to mark the end of stream
+        //}
 
         return batches;
     }

@@ -2,7 +2,7 @@
   "profiles": {
     "PerTest": {
       "commandName": "Project",
-      "commandLineArgs": "feed"
+      "commandLineArgs": "feed 2000000"
     }
   }
 }

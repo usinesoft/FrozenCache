@@ -60,46 +60,62 @@ public sealed class Connector(string host, int port) : IDisposable
     {
         if (_client == null || _stream == null) throw new InvalidOperationException("Not connected to server");
 
-        var feedRequest = new BeginFeedRequest(collectionName, newVersion);
-
-        await _stream.WriteMessageAsync(feedRequest, CancellationToken.None);
-
-        var writer = new BinaryWriter(_stream, Encoding.UTF8, true);
-
-        // Prepare the batch of items to feed
-        FeedItem[] batch = ArrayPool<FeedItem>.Shared.Rent(1000);
-
-        int batchSize = 0;
-        foreach (var item in items)
+        FeedItem[] batch = [];
+        try
         {
-            var feedItem = new FeedItem
-            {
-                Data = item.Data,
-                Keys = item.Keys
-            };
+            var feedRequest = new BeginFeedRequest(collectionName, newVersion);
 
-            batch[batchSize++] = feedItem;
-            if (batchSize >= 1000)
+            await _stream.WriteMessageAsync(feedRequest, CancellationToken.None);
+
+            // the server will validate the request before sending data
+            var result = await _stream.ReadMessageAsync(CancellationToken.None);
+            if (result is StatusResponse { Success: false } statusResponse) throw new CacheException(statusResponse.ErrorMessage);
+
+
+            var writer = new BinaryWriter(_stream, Encoding.UTF8, true);
+
+            const int maxBatchSize = 1_000_000; // 1 MB per batch
+            const int maxMessagesPerBatch = 5_000; // 5_000 items per batch
+
+            // Prepare the batch of items to feed
+            batch = ArrayPool<FeedItem>.Shared.Rent(maxMessagesPerBatch);
+
+            int batchSize = 0;
+            foreach (var item in items)
             {
-                _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize), 1_000_000);
-                batchSize = 0;
+                var feedItem = new FeedItem
+                {
+                    Data = item.Data,
+                    Keys = item.Keys
+                };
+
+                batch[batchSize++] = feedItem;
+                if (batchSize >= maxMessagesPerBatch)
+                {
+                    _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize), maxBatchSize);
+                    batchSize = 0;
+                }
+
             }
 
+            // Write any remaining items in the batch
+            _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize));
+
+            if (batchSize != 0) // if the last one was not empty, we need to write an empty batch as end marker
+            {
+                // write an empty batch to mark the end of stream
+                _batchSerializer.Serialize(writer, Array.Empty<FeedItem>());
+            }
         }
-
-        // Write any remaining items in the batch
-        _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize));
-
-        if (batchSize != 0)// if the last one was not empty, we need to write an empty batch as end marker
+        
+        finally
         {
-            // write an empty batch to mark the end of stream
-            _batchSerializer.Serialize(writer, Array.Empty<FeedItem>());
+            if(batch.Length > 0)
+                ArrayPool<FeedItem>.Shared.Return(batch);
         }
         
 
         var response = await _stream.ReadMessageAsync(CancellationToken.None);
-
-        ArrayPool<FeedItem>.Shared.Return(batch);
 
         if (response is StatusResponse status)
         {

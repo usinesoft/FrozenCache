@@ -108,21 +108,29 @@ namespace PerTest
         private static async Task FeedData(Connector connector, int count, string? version)
         {
 
-            if (string.IsNullOrWhiteSpace(version))
+            try
             {
-                await connector.DropCollection("big");
+                if (string.IsNullOrWhiteSpace(version))
+                {
+                    await connector.DropCollection("big");
 
-                await connector.CreateCollection("big", "id", "name");
+                    await connector.CreateCollection("big", "id", "name");
+                }
+
+                version ??= "v1";
+
+
+                var watch = Stopwatch.StartNew();
+                await connector.FeedCollection("big", version, GetItems(count, 100, 500));
+
+                watch.Stop();
+                Console.WriteLine($"Feeding {count} items items took {watch.ElapsedMilliseconds} ms");
             }
-
-            version ??= "v1";
-
-
-            var watch = Stopwatch.StartNew();
-            await connector.FeedCollection("big", version, GetItems(count, 100, 500));
-
-            watch.Stop();
-            Console.WriteLine($"Feeding {count} items items took {watch.ElapsedMilliseconds} ms");
+            catch (Exception e)
+            {
+                Console.WriteLine(e.Message);
+                
+            }
 
         }
     }
