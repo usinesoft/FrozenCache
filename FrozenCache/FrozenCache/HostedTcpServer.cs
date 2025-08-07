@@ -194,17 +194,20 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
             foreach (var keyValue in queryRequest.PrimaryKeyValues)
             {
-                var item = Store.GetByPrimaryKey(queryRequest.CollectionName, keyValue);
-                if(item != null)
+                var items = Store.GetByPrimaryKey(queryRequest.CollectionName, keyValue);
+                
+                foreach (var item in items)
                 {
                     temp.Add(item.Data);
                 }
-            
+                
             }
 
             result.ObjectsData = temp.ToArray();
 
-            result.SingleAnswer = true;
+
+            result.SingleAnswer = true;//single message containing multiple items
+
             await stream.WriteMessageAsync(result, ct);
         }
         catch (Exception e)

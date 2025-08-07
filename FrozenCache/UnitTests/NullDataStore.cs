@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using PersistentStore;
 
 
@@ -19,19 +20,19 @@ public class NullDataStore : IDataStore
         throw new NotImplementedException();
     }
 
-    public void Open()
+    public void Open(ILogger? logger = null)
     {
         throw new NotImplementedException();
     }
 
-    public Item? GetByPrimaryKey(string collectionName, long keyValue)
+    public List<Item> GetByPrimaryKey(string collectionName, long keyValue)
     {
         if (keyValue == 12)
         {
-            return new Item(new byte[121], keyValue);
+            return [new Item(new byte[121], keyValue)];
         }
 
-        return null;
+        return [];
     }
 
     public int FeedCollection(string collectionName, string newVersion, IEnumerable<Item> items)

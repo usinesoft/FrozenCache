@@ -95,6 +95,11 @@ public class TcpServerTest
 
         using var client = new Connector("localhost", server.Port);
         client.Connect();
+
+        var alive = await client.Ping();
+
+        Assert.That(alive, Is.True, "Server should answer to ping messages");
+
         await client.CreateCollection("testCollection", "id", "name", "age");
 
         var watch = Stopwatch.StartNew();

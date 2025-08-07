@@ -47,13 +47,8 @@ internal static class Program
 
         var logger = app.Services.GetService<ILogger<DataStore>>();
 
-        store.Notification += (sender, eventArgs) =>
-        {
-            logger?.LogInformation("{Message}", eventArgs.Message);
-        };
-
-
-        store.Open();
+        
+        store.Open(logger);
 
         var sampleTodos = new Todo[] {
             new(1, "Walk the dog"),

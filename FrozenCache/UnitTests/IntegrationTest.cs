@@ -9,6 +9,8 @@ using PersistentStore;
 
 namespace UnitTests;
 
+// initialized by setup
+#pragma warning disable CS8618 
 
 /// <summary>
 /// Check integration between <see cref="Connector"/> <see cref="HostedTcpServer"/> and <see cref="DataStore"/>
@@ -18,7 +20,9 @@ public class IntegrationTest
     const string StoreName = "teststore";
 
     private HostedTcpServer? _server;
+
     private Mock<ILogger<HostedTcpServer>> _logger;
+
 
     private DataStore _store;
 
@@ -28,7 +32,7 @@ public class IntegrationTest
     public void Clean()
     {
         _server?.StopAsync(CancellationToken.None).GetAwaiter().GetResult();
-        _store?.Dispose();
+        _store.Dispose();
 
         DataStore.Drop(StoreName);
     }
@@ -62,7 +66,7 @@ public class IntegrationTest
 
         await connector.CreateCollection("testCollection", "id", "name", "age");
 
-        var items = new Item[]
+        var items = new[]
             {
                 new Item(new byte[100], 1, 10, 100),
                 new Item(new byte[200], 2, 20, 200),
@@ -70,7 +74,7 @@ public class IntegrationTest
             }
             ;
 
-        var itemsv2 = new Item[]
+        var itemsv2 = new[]
             {
                 new Item(new byte[100], 1, 10, 100),
                 new Item(new byte[200], 2, 20, 200),
@@ -100,6 +104,43 @@ public class IntegrationTest
         // feeding an older version should throw an exception
         Assert.ThrowsAsync<CacheException>(async () =>
             await connector.FeedCollection("testCollection", "v1", itemsv2), "Feeding an older version should throw an exception");
+    }
+
+    [Test]
+    public async Task FeedAndRetrieveWithDuplicateKeys()
+    {
+        var connector = new Connector("localhost", _server!.Port);
+
+        connector.Connect();
+
+        await connector.CreateCollection("testCollection", "id", "name", "age");
+
+        var items = new[]
+            {
+                new Item(new byte[100], 1, 10, 100),
+                new Item(new byte[200], 2, 20, 200),
+                new Item(new byte[201], 2, 21, 201),
+                new Item(new byte[300], 3, 30, 300),
+                new Item(new byte[301], 3, 31, 301),
+                new Item(new byte[302], 3, 32, 302)
+            }
+            ;
+
+        await connector.FeedCollection("testCollection", "v1", items);
+
+        var result2 = await connector.QueryByPrimaryKey("testCollection", 2);
+        Assert.That(result2.Count, Is.EqualTo(2));
+        Assert.That(result2[0].Length, Is.EqualTo(200), "200 bytes of data were expected");
+        Assert.That(result2[1].Length, Is.EqualTo(201), "201 bytes of data were expected");
+
+        var result3 = await connector.QueryByPrimaryKey("testCollection", 3);
+        Assert.That(result3.Count, Is.EqualTo(3));
+        Assert.That(result3[0].Length, Is.EqualTo(300), "300 bytes of data were expected");
+        Assert.That(result3[1].Length, Is.EqualTo(301), "301 bytes of data were expected");
+        Assert.That(result3[2].Length, Is.EqualTo(302), "302 bytes of data were expected");
+
+        var all = await connector.QueryByPrimaryKey("testCollection", 1,2,3);
+        Assert.That(all.Count, Is.EqualTo(6));
     }
 
 }

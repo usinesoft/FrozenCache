@@ -50,19 +50,12 @@ public class FeedItemBatchSerializer : IBatchSerializer<FeedItem>
 
         int batches = 1;
 
-        var lastBatchSize = 0;
-
+        
         if (count < items.Length)
         {
             // Recursive call is used to handle large batches that exceed the maxBatchSizeInBytes
-            lastBatchSize = Serialize(writer, items.Slice(count), maxBatchSizeInBytes);
-            batches += lastBatchSize;
+            batches += Serialize(writer, items.Slice(count), maxBatchSizeInBytes);
         }
-
-        //if (lastBatchSize != 0)
-        //{
-        //    Serialize(writer, Array.Empty<FeedItem>()); // Write an empty batch to mark the end of stream
-        //}
 
         return batches;
     }

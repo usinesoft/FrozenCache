@@ -1,4 +1,6 @@
-﻿namespace PersistentStore;
+﻿using Microsoft.Extensions.Logging;
+
+namespace PersistentStore;
 
 /// <summary>
 /// Abstract definition of a frozen data store.
@@ -27,7 +29,7 @@ public interface IDataStore
     /// Opens the data store for operations. This method should be called before any other operations.
     /// Data from the most recent version of each collection will be indexed in memory for fast access.
     /// </summary>
-    public void Open();
+    public void Open(ILogger? logger = null);
 
     /// <summary>
     /// Retrieves an object in a collection by primary key
@@ -35,7 +37,7 @@ public interface IDataStore
     /// <param name="collectionName"></param>
     /// <param name="keyValue"></param>
     /// <returns></returns>
-    public Item? GetByPrimaryKey(string collectionName, long keyValue);
+    public List<Item> GetByPrimaryKey(string collectionName, long keyValue);
 
     /// <summary>
     /// Create a new version of a collection and index it in memory.

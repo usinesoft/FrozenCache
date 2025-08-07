@@ -60,6 +60,8 @@ public class MessageStreamingTest
         var batchSerializer = new FeedItemBatchSerializer();
 
         var batches = batchSerializer.Serialize(new BinaryWriter(stream, Encoding.UTF8, true), messages.AsSpan(), 50_000);
+        // add an empty batch to mark the end of the stream
+        batchSerializer.Serialize(new BinaryWriter(stream, Encoding.UTF8, true), Array.Empty<FeedItem>().AsSpan());
 
         Assert.That(batches, Is.GreaterThan(1), "Must have been divided in multiple batches as the buffer size is too small");
 

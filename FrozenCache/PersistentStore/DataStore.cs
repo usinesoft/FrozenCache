@@ -2,6 +2,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Messages;
+using Microsoft.Extensions.Logging;
 
 namespace PersistentStore;
 
@@ -88,7 +89,8 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
 
     private bool _opened;
 
-    public void Open()
+
+    public void Open(ILogger? logger = null)
     {
         if (_opened)
             throw new CacheException("DataStore is already opened");
@@ -107,21 +109,25 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
                 .OrderBy(x => x)
                 .ToList();
 
-
-            if (allVersionsDirectories.Count > 0)
-                _collectionStores[metadata.Name] =
-                    new CollectionStore(allVersionsDirectories[^1], metadata.Indexes.Count);
-
             string? lastVersion = allVersionsDirectories.Count > 0
                 ? Path.GetFileName(allVersionsDirectories[^1])
                 : null;
 
-            Notification?.Invoke(this, new NotificationEventArgs(
-                $"Collection '{metadata.Name}' opened with last version {lastVersion}"));
+            logger?.LogInformation("Opening collection {CollectionName} with last version {LastVersion}",
+                metadata.Name, lastVersion);
+
+            if (allVersionsDirectories.Count > 0)
+                _collectionStores[metadata.Name] =
+                    new CollectionStore(allVersionsDirectories[^1], metadata.Indexes.Count, logger);
+
+            logger?.LogInformation("Collection {CollectionName} opened with last version {LastVersion}",
+                metadata.Name, lastVersion);
+
+
         });
     }
 
-    public Item? GetByPrimaryKey(string collectionName, long keyValue)
+    public List<Item> GetByPrimaryKey(string collectionName, long keyValue)
     {
         return _collectionStores[collectionName].GetByFirstKey(keyValue);
     }
@@ -149,7 +155,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
             throw new CacheException($"Version {newVersion} already exits");
 
         var collectionStore = new CollectionStore(versionPath, collectionMetadata.Indexes.Count,
-            collectionMetadata.FileSize, collectionMetadata.MaxItemsInFile);
+            null, collectionMetadata.FileSize, collectionMetadata.MaxItemsInFile);
 
         return collectionStore;
     }
@@ -209,12 +215,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         foreach (var collectionStore in _collectionStores.Values) collectionStore.Dispose();
     }
 
-    public event EventHandler<NotificationEventArgs>? Notification; 
-
-    public class NotificationEventArgs(string message) : EventArgs
-    {
-        public string Message { get; } = message;
-    }
+    
 }
 
 [JsonSerializable(typeof(CollectionMetadata))]

@@ -159,9 +159,9 @@ namespace UnitTests
                 Assert.That(collections[0].Name, Is.EqualTo("persons"), "Collection name should match the one created");
                 Assert.That(collections[0].LastVersion, Is.EqualTo("v001"),
                     "Last version should be '001' after first feed");
-                var item0 = store.GetByPrimaryKey("persons", 0);
-                var item1000 = store.GetByPrimaryKey("persons", 1000);
-                var item1001 = store.GetByPrimaryKey("persons", 1001);
+                var item0 = store.GetByPrimaryKey("persons", 0).FirstOrDefault();
+                var item1000 = store.GetByPrimaryKey("persons", 1000).FirstOrDefault();
+                var item1001 = store.GetByPrimaryKey("persons", 1001).FirstOrDefault();
 
                 Assert.That(item0, Is.Not.Null, "Item with id 0 should exist");
                 Assert.That(item0!.Keys[0], Is.EqualTo(0));
@@ -176,7 +176,7 @@ namespace UnitTests
 
 
                 // check for items in the second segment
-                var itemOther = store.GetByPrimaryKey("persons", 1_000_003);
+                var itemOther = store.GetByPrimaryKey("persons", 1_000_003).FirstOrDefault();
                 Assert.That(itemOther, Is.Not.Null, "Item with id 1_000_003 should exist");
                 Assert.That(itemOther!.Keys[0], Is.EqualTo(1_000_003));
 
@@ -222,14 +222,14 @@ namespace UnitTests
                 Assert.That(collections[1].Name, Is.EqualTo("second"), "Second collection should be 'second'");
                 Assert.That(collections[2].Name, Is.EqualTo("third"), "Third collection should be 'third'");
 
-                var item1 = store.GetByPrimaryKey("first", 10);
+                var item1 = store.GetByPrimaryKey("first", 10).FirstOrDefault();
                 Assert.That(item1, Is.Not.Null);
                 Assert.That(item1!.Keys.Length, Is.EqualTo(2));
                 Assert.That(item1!.Keys[0], Is.EqualTo(10));
                 var content = Encoding.UTF8.GetString(item1.Data);
                 Assert.That(content, Is.EqualTo("first"));
 
-                var item2 = store.GetByPrimaryKey("second", 101);
+                var item2 = store.GetByPrimaryKey("second", 101).FirstOrDefault();
                 Assert.That(item2, Is.Not.Null);
                 Assert.That(item2!.Keys.Length, Is.EqualTo(2));
                 Assert.That(item2!.Keys[0], Is.EqualTo(101));
@@ -243,14 +243,14 @@ namespace UnitTests
             {
                 store.Open();
 
-                var item1 = store.GetByPrimaryKey("first", 10);
+                var item1 = store.GetByPrimaryKey("first", 10).FirstOrDefault();
                 Assert.That(item1, Is.Not.Null);
                 Assert.That(item1!.Keys.Length, Is.EqualTo(2));
                 Assert.That(item1!.Keys[0], Is.EqualTo(10));
                 var content = Encoding.UTF8.GetString(item1.Data);
                 Assert.That(content, Is.EqualTo("first"));
 
-                var item2 = store.GetByPrimaryKey("second", 101);
+                var item2 = store.GetByPrimaryKey("second", 101).FirstOrDefault();
                 Assert.That(item2, Is.Not.Null);
                 Assert.That(item2!.Keys.Length, Is.EqualTo(2));
                 Assert.That(item2!.Keys[0], Is.EqualTo(101));

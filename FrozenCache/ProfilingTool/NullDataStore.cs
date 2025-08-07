@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using PersistentStore;
 
 namespace ProfilingTool;
@@ -20,12 +21,12 @@ public class NullDataStore : IDataStore
         throw new NotImplementedException();
     }
 
-    public void Open()
+    public void Open(ILogger? logger = null)
     {
         throw new NotImplementedException();
     }
 
-    public Item? GetByPrimaryKey(string collectionName, long keyValue)
+    public List<Item> GetByPrimaryKey(string collectionName, long keyValue)
     {
         throw new NotImplementedException();
     }

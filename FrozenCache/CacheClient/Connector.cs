@@ -1,4 +1,5 @@
 ﻿using System.Buffers;
+using System.Collections;
 using System.Net.Sockets;
 using System.Text;
 using Messages;
@@ -147,6 +148,21 @@ public sealed class Connector(string host, int port) : IDisposable
         {
             throw new CacheException($"Unexpected response type: {response?.GetType().Name}");
         }
+    }
+
+    public async Task<bool> Ping()
+    {
+        if (_client == null || _stream == null) throw new InvalidOperationException("Not connected to server");
+        var request = new PingMessage();
+        
+        await _stream.WriteMessageAsync(request, CancellationToken.None);
+        var response = await _stream.ReadMessageAsync(CancellationToken.None);
+
+        if (response is PingMessage)
+            return true;
+
+        return false;
+
     }
 
 
