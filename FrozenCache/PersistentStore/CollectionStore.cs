@@ -330,11 +330,11 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     }
 
 
-    private static unsafe void ReadBytes(int offset, int num, MemoryMappedViewAccessor view, byte[] buffer)
+    private static unsafe void ReadBytes(int offset, int length, MemoryMappedViewAccessor view, byte[] buffer)
     {
         var ptr = (byte*)0;
         view.SafeMemoryMappedViewHandle.AcquirePointer(ref ptr);
-        Marshal.Copy(IntPtr.Add(new IntPtr(ptr), offset), buffer, 0, num);
+        Marshal.Copy(IntPtr.Add(new IntPtr(ptr), offset), buffer, 0, length);
         view.SafeMemoryMappedViewHandle.ReleasePointer();
     }
 
@@ -361,10 +361,10 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
         _logger?.LogInformation("Done post-processing index");
 
 
-#pragma warning disable S1215
-        GC.Collect();
-#pragma warning restore S1215
-        GC.WaitForPendingFinalizers();
+//#pragma warning disable S1215
+//        GC.Collect();
+//#pragma warning restore S1215
+//        GC.WaitForPendingFinalizers();
     }
 
     public void EndOfFeed()
@@ -399,7 +399,7 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 /// <summary>
 ///     The value in the index by most discriminant key.
 /// </summary>
-[StructLayout(LayoutKind.Sequential, Pack = 4)]
+//[StructLayout(LayoutKind.Sequential, Pack = 4)]
 internal class IndexEntry
 {
     /// <summary>

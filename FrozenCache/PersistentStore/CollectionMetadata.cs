@@ -47,6 +47,42 @@ public class CollectionMetadata
     /// Maximum number of versions to keep for this collection. When a new version is created, the oldest version will be deleted if the limit is exceeded.
     /// </summary>
     public int MaxVersionsToKeep { get; set; } = 2;
+
+
+    /// <summary>
+    /// Check if two metadata objects are compatible. Used when creating a collection that already exists.If compatible, the existing collection will be used.
+    /// </summary>
+    /// <param name="other"></param>
+    /// <returns></returns>
+    public bool IsCompatibleWith(CollectionMetadata other)
+    {
+        if (Name != other.Name)
+            return false;
+
+        if (Indexes.Count != other.Indexes.Count)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < Indexes.Count; i++)
+        {
+            if (Indexes[i].Name != other.Indexes[i].Name || Indexes[i].IsUnique != other.Indexes[i].IsUnique)
+            {
+                return false;
+            }
+        }
+
+        if (MaxItemsInFile != other.MaxItemsInFile || FileSize != other.FileSize || MaxVersionsToKeep != other.MaxVersionsToKeep)
+        {
+            return false;
+        }
+
+
+
+        return true;
+    }
+
+    
 }
 
 public record IndexMetadata(string Name, bool IsUnique = false);

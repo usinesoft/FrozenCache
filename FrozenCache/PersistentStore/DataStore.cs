@@ -32,13 +32,29 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
     {
         var path = Path.Combine(RootPath, metadata.Name);
 
-        if (Directory.Exists(path)) throw new CacheException("Collection already exists");
+        if (Directory.Exists(path))
+        {
+            var jsonMetadata = File.ReadAllText(Path.Combine(path, "metadata.json"));
 
-        Directory.CreateDirectory(path);
+            var currentMetadata = JsonSerializer.Deserialize<CollectionMetadata>(jsonMetadata, AppJsonSerializerContext.Default.CollectionMetadata) ??
+                                  throw new CacheException("Failed to deserialize existing collection metadata");
+            if (!currentMetadata.IsCompatibleWith(metadata))
+            {
+                throw new CacheException(
+                    $"Collection {metadata.Name} already exists with different schema.");
+            }
 
-        //metadata is stored as json in the collection root path
-        var json = JsonSerializer.Serialize(metadata, AppJsonSerializerContext.Default.CollectionMetadata);
-        File.WriteAllText(Path.Combine(path, "metadata.json"), json);
+            // if the collection already exists, and it is compatible we ignore the request
+        }
+        else
+        {
+            Directory.CreateDirectory(path);
+            //metadata is stored as json in the collection root path
+            var json = JsonSerializer.Serialize(metadata, AppJsonSerializerContext.Default.CollectionMetadata);
+            File.WriteAllText(Path.Combine(path, "metadata.json"), json);
+        }
+
+        
     }
 
     public CollectionMetadata[] GetCollections()

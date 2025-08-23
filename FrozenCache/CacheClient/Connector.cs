@@ -1,5 +1,4 @@
 ﻿using System.Buffers;
-using System.Collections;
 using System.Net.Sockets;
 using System.Text;
 using Messages;
@@ -15,20 +14,29 @@ public sealed class Connector(string host, int port) : IDisposable
 
     private readonly FeedItemBatchSerializer _batchSerializer = new();
 
+    public string Address => $"{host}:{port}";
+
     public bool Connect()
     {
         if (_client != null) throw new InvalidOperationException("Already connected");
-        
-        _client = new TcpClient(host, port);
 
-        _client.NoDelay = true; // Disable Nagle's algorithm for low latency
+        try
+        {
+            _client = new TcpClient(host, port);
 
-        _stream = _client.GetStream();
+            _client.NoDelay = true; // Disable Nagle's algorithm for low latency
 
-        if (_client.Connected)
-            return true;
+            _stream = _client.GetStream();
 
-        return false;
+            if (_client.Connected)
+                return true;
+
+            return false;
+        }
+        catch (SocketException)
+        {
+            return false; // Connection failed, return false
+        }
     }
 
     public async Task CreateCollection(string collectionName, string primaryKey, params string[] otherIndexes)
@@ -220,4 +228,6 @@ public sealed class Connector(string host, int port) : IDisposable
     {
         _client?.Dispose();
     }
+
+    
 }

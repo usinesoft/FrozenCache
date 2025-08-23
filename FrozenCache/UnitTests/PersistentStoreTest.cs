@@ -48,8 +48,13 @@ namespace UnitTests
 
             store.CreateCollection(metadata);
 
-            Assert.Throws<CacheException>(() => store.CreateCollection(metadata),
-                "Creating a collection that already exists should throw exception");
+            // if a collection already exists and its metadata is compatible, it should not throw an exception
+            store.CreateCollection(metadata);
+
+            var metadata1 = new CollectionMetadata("persons", "id");
+
+            Assert.Throws<CacheException>(() => store.CreateCollection(metadata1),
+                "Creating a collection that already exists with different metadata should throw exception");
 
             var collections = store.GetCollections();
 
