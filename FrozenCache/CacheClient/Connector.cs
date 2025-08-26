@@ -1,4 +1,5 @@
 ﻿using System.Buffers;
+using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using Messages;
@@ -22,7 +23,20 @@ public sealed class Connector(string host, int port) : IDisposable
 
         try
         {
-            _client = new TcpClient(host, port);
+            // accept hostname, IPV4 or IPV6 address
+
+            if (!IPAddress.TryParse(host, out var address))
+                address = Dns.GetHostEntry(host).AddressList.FirstOrDefault(x=>x.AddressFamily == AddressFamily.InterNetwork);
+
+            if (address == null)
+                throw new CacheException($"Unable to resolve host:{address}");
+
+
+            _client = new TcpClient();
+
+
+            _client.Connect(address, port);
+
 
             _client.NoDelay = true; // Disable Nagle's algorithm for low latency
 
@@ -160,16 +174,31 @@ public sealed class Connector(string host, int port) : IDisposable
 
     public async Task<bool> Ping()
     {
-        if (_client == null || _stream == null) throw new InvalidOperationException("Not connected to server");
-        var request = new PingMessage();
+        try
+        {
+            var oldTimeout = _client!.ReceiveTimeout;
+
+            // do not wait too long for the ping answer
+            _client.ReceiveTimeout = 100;
+
+
+            if (_client == null || _stream == null) throw new InvalidOperationException("Not connected to server");
+            var request = new PingMessage();
         
-        await _stream.WriteMessageAsync(request, CancellationToken.None);
-        var response = await _stream.ReadMessageAsync(CancellationToken.None);
+            await _stream.WriteMessageAsync(request, CancellationToken.None);
+            var response = await _stream.ReadMessageAsync(CancellationToken.None);
 
-        if (response is PingMessage)
-            return true;
+            _client.ReceiveTimeout = oldTimeout;
 
-        return false;
+            if (response is PingMessage)
+                return true;
+
+            return false;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
 
     }
 

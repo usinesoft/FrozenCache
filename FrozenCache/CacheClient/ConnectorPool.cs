@@ -1,11 +1,14 @@
-﻿namespace CacheClient
+﻿using System.Diagnostics;
+using System.Runtime.CompilerServices;
+
+namespace CacheClient
 {
 
     /// <summary>
     /// Manage a pool of connectors to the cache server. If the pool is empty the client awaits for a connector to become available.
     /// One pool is created for each cache server.
     /// </summary>
-    internal sealed class ConnectorPool: IDisposable, IAsyncDisposable
+    public sealed class ConnectorPool: IDisposable, IAsyncDisposable
     {
         private readonly Queue<Connector> _pool = new();
         
@@ -59,34 +62,93 @@
                     {
                         await Task.Delay(TimeSpan.FromMilliseconds(watchDogFrequencyInMilliseconds), tk);
 
+                        Debug.Print($"watchdog begin;frequency = {watchDogFrequencyInMilliseconds} ");
+
                         tk.ThrowIfCancellationRequested();
 
                         bool serverUp = false;
 
-                        using Connector testConnector = new Connector(_server, _port);
-                        if (testConnector.Connect() && await testConnector.Ping())
+                        if (IsConnected)
                         {
-                            serverUp = true;
+                            Debug.Print("watchdog : is connected check with pooled connector");
+
+                            try
+                            {
+                                var testConnector = await Get();
+                                if (await testConnector.Ping())
+                                {
+                                    Debug.Print("watchdog : still connected");
+                                    serverUp = true;
+                                    Return(testConnector);
+                                }
+                            }
+                            catch (Exception)
+                            {
+                                Debug.Print("watchdog : exception while checking connection");
+                            }
+                        }
+                        else
+                        {
+                            Debug.Print("watchdog : not connected check with new connector");
+
+                            try
+                            {
+                                using var connector = new Connector(_server, _port);
+
+
+                                if (connector.Connect())
+                                {
+                                    Debug.Print("watchdog : connected, waiting for ping response");
+                                    serverUp = await connector.Ping();
+                                    Debug.Print($"watchdog : server is up again:ping answer is {serverUp}");
+                                }
+                                else
+                                {
+                                    Debug.Print("watchdog : connect returned false");
+                                }
+                                    
+                            }
+                            catch (Exception e)
+                            {
+                                Debug.Print($"watchdog : exception while connecting:{e.Message}");
+                                // ignore connection errors, we will try to reconnect later
+                            }
                         }
 
-                        if(!serverUp)
+
+                        if (!serverUp)
                         {
                             IsConnected = false;
                             _pool.Clear();
+                            Debug.Print("watchdog : server is down, clearing pool and marking as not connected");
                         }
 
                         // If the server is up and the pool is empty, we can try to reconnect
                         if (serverUp && !IsConnected)
                         {
-                            InternalConnect();
+                            Debug.Print("watchdog : reconnect");
+
+                            try
+                            {
+                                InternalConnect();
+                            }
+                            catch (Exception)
+                            {
+                                Debug.Print("watchdog : reconnect failed, pool is still empty");
+                            }
                         }
 
-                        
+                        Debug.Print("watchdog end");
                     }
                 }
-                catch (OperationCanceledException )
+                catch (OperationCanceledException)
                 {
+                    Debug.Print("watchdog operation canceled exception");
                     // ignore
+                }
+                catch (Exception)
+                {
+                    Debug.Print("watchdog exception");
                 }
 
             }, tk);

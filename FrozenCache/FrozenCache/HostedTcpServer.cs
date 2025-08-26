@@ -1,4 +1,5 @@
-﻿using System.Net;
+﻿using System.Diagnostics;
+using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading.Channels;
@@ -6,6 +7,7 @@ using Messages;
 using Microsoft.Extensions.Options;
 using PersistentStore;
 using Serilog;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 using static System.String;
 using ILogger = Microsoft.Extensions.Logging.ILogger;
 
@@ -26,29 +28,34 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
     public int Port { get; private set; }
 
     private readonly FeedItemBatchSerializer _batchSerializer = new();
+    private TcpListener _listener;
 
     public  Task StartAsync(CancellationToken cancellationToken)
     {
 
         
         Logger.LogInformation("Starting TCP server...");
+        Debug.Print($"Starting TCP server");
 
         var ct = _cts.Token;
 
         try
         {
-            var listener = new TcpListener(IPAddress.Any, Configuration.Value.Port);
-            listener.Server.NoDelay = true; // Disable Nagle's algorithm for low latency
+            _listener = new TcpListener(IPAddress.Any, Configuration.Value.Port);
+            _listener.Server.NoDelay = true; // Disable Nagle's algorithm for low latency
             
-            listener.Server.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only, 0);
+            _listener.Server.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only, 0);
 
             
-            listener.Start();
+            _listener.Start();
 
-            if (!(listener.LocalEndpoint is IPEndPoint endpoint))
+            if (!(_listener.LocalEndpoint is IPEndPoint endpoint))
                 throw new NotSupportedException("Can not initialize server");
 
             Port = endpoint.Port;
+
+            Debug.Print($"TCP server is listening on port {Port}");
+
 
             Logger.LogInformation("Server started on port {Port}", Port);
 
@@ -59,7 +66,7 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
                 {
                     while (!ct.IsCancellationRequested)
                     {
-                        var client = await listener.AcceptTcpClientAsync(ct);
+                        var client = await _listener.AcceptTcpClientAsync(ct);
                         client.NoDelay = true; // Disable Nagle's algorithm for low latency
                         
 
@@ -85,6 +92,7 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         catch (Exception ex)
         {
             Logger.LogError(ex, "Error starting TCP server: {Message}", ex.Message);
+            Debug.Print($"Error starting TCP server: {ex.Message}");
         }
 
         return Task.CompletedTask;
@@ -111,6 +119,7 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
                 // The ping request is a special case, it has no data, so we can respond immediately
                 if (message is PingMessage ping)
                 {
+                    Debug.Print("server ping request received");
                     await stream.WriteMessageAsync(ping, cancellationToken);
 
                     continue;
@@ -334,6 +343,8 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
         // Cancel the internal token source to stop the server
         await _cts.CancelAsync();
+
+        _listener.Dispose();
 
         await Task.Delay(200, cancellationToken);
 

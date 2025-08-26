@@ -1,4 +1,5 @@
 ﻿using System.Buffers;
+using System.Diagnostics;
 using MessagePack;
 #pragma warning disable S6966
 
@@ -91,6 +92,9 @@ public static class StreamingHelper
             await stream.ReadRawMessage(header,8, ct);
                 
             MessageType messageType = (MessageType)BitConverter.ToInt32(header, 0);
+
+            Debug.Print($"message received:{Enum.GetName(typeof(MessageType), messageType)}");
+
             int size = BitConverter.ToInt32(header, 4);
 
             if (size < 0 || size > 1024 * 1024) // Arbitrary limit to prevent too large requests
@@ -158,7 +162,7 @@ public static class StreamingHelper
             if (read == 0)
             {
                 throw new InvalidOperationException(
-                    "Client disconnected while reading BeginFeedRequest data.");
+                    "Client disconnected while reading data.");
             }
 
             totalBytesRead += read;
