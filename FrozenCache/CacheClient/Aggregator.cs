@@ -122,6 +122,15 @@ public class Aggregator
         {
             return await connector.QueryByPrimaryKey(collection, keys);
         }
+        catch (Exception)
+        {
+            var serverAddress = connector.Address;
+            var pool = _pools.FirstOrDefault(p => p.Address == serverAddress);
+            pool?.MarkAsNotConnected();
+            // try another server
+            return await QueryRawDataByPrimaryKey(collection, keys);
+
+        }
         finally
         {
             Return(connector);
@@ -220,7 +229,7 @@ public class Aggregator
     public async Task FeedCollection<T>(string collectionName, IEnumerable<T> items)
     {
         
-        string newVersion = DateTime.UtcNow.ToString("yyyy-MM-dd hh:mm:ss");
+        string newVersion = DateTime.UtcNow.ToString("yyyyMMdd_hhmmss");
 
         // generate once , feed all in parallel
 

@@ -1,11 +1,14 @@
-﻿using CacheClient;
+﻿using System.Diagnostics;
+using CacheClient;
 using FrozenCache;
+using MessagePack;
 using Messages;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
 using NUnit.Framework;
 using PersistentStore;
+using UnitTests.TestData;
 
 namespace UnitTests;
 
@@ -141,6 +144,54 @@ public class IntegrationTest
 
         var all = await connector.QueryByPrimaryKey("testCollection", 1,2,3);
         Assert.That(all.Count, Is.EqualTo(6));
+    }
+
+    [Test]
+    public async Task FeedTypedCollection()
+    {
+        var aggregator = new Aggregator(3, ("localhost", _server!.Port));
+
+        await aggregator.DeclareCollection("invoices", "id");
+        
+        aggregator.RegisterTypedCollection<Invoice>("invoices", 
+            x=> MessagePackSerializer.Serialize(x),
+            x => MessagePackSerializer.Deserialize<Invoice>(x),
+            x => x.Id
+            );
+
+        int count = 1_000_000;
+
+        var watch = Stopwatch.StartNew();
+        var invoices = Invoice.GenerateInvoices(count).ToArray();
+        watch.Stop();
+
+        Console.WriteLine($"Feeding {count} objects took {watch.ElapsedMilliseconds} milliseconds");
+
+        await aggregator.FeedCollection("invoices", invoices);
+
+        var result = await aggregator.QueryByPrimaryKey<Invoice>("invoices", 2, 4, 5);
+        Assert.That(result, Is.Not.Null, "Result should not be null");
+        Assert.That(result.Count, Is.EqualTo(2), "One object should be returned");
+
+        var ids = new long[10];
+
+        var rg = new Random();
+
+
+        watch = Stopwatch.StartNew();
+        for (int j = 0; j < 100; j++)
+        {
+            for (int i = 0; i < 10; i++)
+            {
+                ids[i] = rg.Next(1, 100_000) * 2;
+            }
+
+            var r = await aggregator.QueryByPrimaryKey<Invoice>("invoices", ids);
+
+        }
+
+        watch.Stop();
+        Console.WriteLine($"retrieving 10 objects 100 times took {watch.ElapsedMilliseconds} milliseconds");
     }
 
 }
