@@ -11,6 +11,8 @@ using UnitTests.TestData;
 
 namespace UnitTests;
 
+#pragma warning disable CS8618      
+
 public class MultiServerIntegrationTest
 {
     private const string StoreName = "teststore";
@@ -130,5 +132,31 @@ public class MultiServerIntegrationTest
 
         watch.Stop();
         Console.WriteLine($"retrieving 10 objects with 100 clients in parallel took {watch.ElapsedMilliseconds} milliseconds");
+
+        // stop one server 
+        await _servers[0].StopAsync(CancellationToken.None);
+        await Task.Delay(500);
+        Console.WriteLine("Stopped server 1");
+
+        // try to query again
+        for (var i = 0; i < 10; i++) ids[i] = rg.Next(1, 100_000) * 2;
+
+        var invoices2 = await aggregator.QueryByPrimaryKey<Invoice>("invoices", ids);
+        Assert.That(invoices2, Is.Not.Null, "Result should not be null");
+        Console.WriteLine($"Queried {invoices2.Count} objects after one server was stopped");
+
+        // stop another server
+        await _servers[1].StopAsync(CancellationToken.None);
+        await Task.Delay(500);
+        Console.WriteLine("Stopped server 2");
+
+        // try to query again
+        for (var i = 0; i < 10; i++) ids[i] = rg.Next(1, 100_000) * 2;
+        var invoices3 = await aggregator.QueryByPrimaryKey<Invoice>("invoices", ids);
+        Assert.That(invoices3, Is.Not.Null, "Result should not be null");
+        Console.WriteLine($"Queried {invoices3.Count} objects after two servers were stopped");
+
+
+
     }
 }

@@ -7,7 +7,6 @@ using Messages;
 using Microsoft.Extensions.Options;
 using PersistentStore;
 using Serilog;
-using static System.Runtime.InteropServices.JavaScript.JSType;
 using static System.String;
 using ILogger = Microsoft.Extensions.Logging.ILogger;
 
@@ -15,27 +14,28 @@ using ILogger = Microsoft.Extensions.Logging.ILogger;
 
 namespace FrozenCache;
 
-public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, IOptions<ServerSettings> configuration) : IHostedService
+public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, IOptions<ServerSettings> configuration)
+    : IHostedService
 {
     public IDataStore Store { get; } = store;
-    
+
     public ILogger Logger { get; } = logger;
     public IOptions<ServerSettings> Configuration { get; } = configuration;
 
-    readonly CancellationTokenSource _cts = new();
+    private readonly CancellationTokenSource _cts = new();
 
     private Channel<FeedItem>? _internalChannel;
     public int Port { get; private set; }
 
     private readonly FeedItemBatchSerializer _batchSerializer = new();
-    private TcpListener _listener;
+    private TcpListener? _listener;
 
-    public  Task StartAsync(CancellationToken cancellationToken)
+    private bool _disposed;
+
+    public Task StartAsync(CancellationToken cancellationToken)
     {
-
-        
         Logger.LogInformation("Starting TCP server...");
-        Debug.Print($"Starting TCP server");
+        Debug.Print("Starting TCP server");
 
         var ct = _cts.Token;
 
@@ -43,10 +43,10 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         {
             _listener = new TcpListener(IPAddress.Any, Configuration.Value.Port);
             _listener.Server.NoDelay = true; // Disable Nagle's algorithm for low latency
-            
+
             _listener.Server.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only, 0);
 
-            
+
             _listener.Start();
 
             if (!(_listener.LocalEndpoint is IPEndPoint endpoint))
@@ -68,11 +68,12 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
                     {
                         var client = await _listener.AcceptTcpClientAsync(ct);
                         client.NoDelay = true; // Disable Nagle's algorithm for low latency
-                        
+
 
                         // client loop
                         _ = Task.Run(async () => { await ClientLoop(ct, client); }, ct);
                     }
+
                     Logger.LogWarning("Server stopped");
                 }
                 catch (OperationCanceledException)
@@ -83,11 +84,7 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
                 {
                     Logger.LogError(ex, "Error starting TCP server: {Message}", ex.Message);
                 }
-
             }, ct);
-
-           
-
         }
         catch (Exception ex)
         {
@@ -96,7 +93,6 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         }
 
         return Task.CompletedTask;
-
     }
 
     private async Task ClientLoop(CancellationToken cancellationToken, TcpClient client)
@@ -104,13 +100,11 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         await using var stream = client.GetStream();
         try
         {
-
             while (!cancellationToken.IsCancellationRequested)
             {
-
                 var message = await stream.ReadMessageAsync(cancellationToken);
 
-                if(message == null)
+                if (message == null)
                 {
                     Logger.LogWarning("Client disconnected");
                     break; // Client disconnected 
@@ -140,26 +134,26 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
                         await ProcessSimpleQuery(queryRequest, stream, cancellationToken);
                         break;
                 }
-                
             }
-
         }
-        catch(OperationCanceledException)
+        catch (OperationCanceledException)
         {
             // Client disconnected or operation was cancelled
             Logger.LogWarning("Cancellation requested");
-            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = "Operation cancelled" }, cancellationToken);
-            
+            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = "Operation cancelled" },
+                cancellationToken);
         }
-        catch(CacheException cacheEx)
+        catch (CacheException cacheEx)
         {
             Logger.LogError("Cache error processing client request: {Message}", cacheEx.Message);
-            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = cacheEx.Message }, cancellationToken);
+            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = cacheEx.Message },
+                cancellationToken);
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Error processing client request: {Message}", ex.Message);
-            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = ex.Message }, cancellationToken);
+            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = ex.Message },
+                cancellationToken);
         }
         finally
         {
@@ -168,15 +162,16 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         }
     }
 
-    private async Task ProcessDropCollection(DropCollectionRequest dropCollectionRequest, NetworkStream stream, CancellationToken cancellationToken)
+    private async Task ProcessDropCollection(DropCollectionRequest dropCollectionRequest, NetworkStream stream,
+        CancellationToken cancellationToken)
     {
         try
         {
-            
             if (IsNullOrWhiteSpace(dropCollectionRequest.CollectionName))
                 throw new ArgumentException("Collection name is empty");
 
-            Log.Information("Drop collection message received for collection {Collection}", dropCollectionRequest.CollectionName);
+            Log.Information("Drop collection message received for collection {Collection}",
+                dropCollectionRequest.CollectionName);
 
             Store.DropCollection(dropCollectionRequest.CollectionName);
             await stream.WriteMessageAsync(new StatusResponse(), cancellationToken);
@@ -186,7 +181,8 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         catch (Exception e)
         {
             Logger.LogError("Error while dropping collection:{Message}", e.Message);
-            await stream.WriteMessageAsync(new StatusResponse{Success = false, ErrorMessage = e.Message}, cancellationToken);
+            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = e.Message },
+                cancellationToken);
         }
     }
 
@@ -197,25 +193,21 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
             if (IsNullOrWhiteSpace(queryRequest.CollectionName))
                 throw new CacheException("Collection name is required in QueryByPrimaryKey request");
 
-            var result = new ResultWithData{CollectionName = queryRequest.CollectionName};
+            var result = new ResultWithData { CollectionName = queryRequest.CollectionName };
 
             List<byte[]> temp = new List<byte[]>();
 
             foreach (var keyValue in queryRequest.PrimaryKeyValues)
             {
                 var items = Store.GetByPrimaryKey(queryRequest.CollectionName, keyValue);
-                
-                foreach (var item in items)
-                {
-                    temp.Add(item.Data);
-                }
-                
+
+                foreach (var item in items) temp.Add(item.Data);
             }
 
             result.ObjectsData = temp.ToArray();
 
 
-            result.SingleAnswer = true;//single message containing multiple items
+            result.SingleAnswer = true; //single message containing multiple items
 
             await stream.WriteMessageAsync(result, ct);
         }
@@ -225,21 +217,21 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         }
     }
 
-    private async Task ProcessCreateCollection(CreateCollectionRequest createRequest, Stream stream, CancellationToken ct)
+    private async Task ProcessCreateCollection(CreateCollectionRequest createRequest, Stream stream,
+        CancellationToken ct)
     {
         try
         {
             if (IsNullOrWhiteSpace(createRequest.PrimaryKeyName))
-            {
                 throw new CacheException("Primary key name is mandatory in CreateCollection request");
-            }
 
-            Logger.LogInformation("Creating collection {Collection} with primary key {PrimaryKey} and indexes {Indexes}",
+            Logger.LogInformation(
+                "Creating collection {Collection} with primary key {PrimaryKey} and indexes {Indexes}",
                 createRequest.CollectionName, createRequest.PrimaryKeyName, createRequest.OtherIndexes);
 
             var metadata = new CollectionMetadata(createRequest.CollectionName, createRequest.PrimaryKeyName,
                 createRequest.OtherIndexes);
-        
+
 
             Store.CreateCollection(metadata);
 
@@ -252,30 +244,23 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
     }
 
 
-    IEnumerable<FeedItem> ReadItems(Stream stream)
+    private IEnumerable<FeedItem> ReadItems(Stream stream)
     {
         var reader = new BinaryReader(stream, Encoding.UTF8, true);
 
         while (true)
         {
+            var msgs = _batchSerializer.Deserialize(reader);
 
-            var msgs= _batchSerializer.Deserialize(reader);
-
-            if(msgs.Count == 0) 
+            if (msgs.Count == 0)
                 yield break; // End of stream
 
-            foreach (var msg in msgs)
-            {
-                yield return msg;
-            }
-            
+            foreach (var msg in msgs) yield return msg;
         }
-        
     }
 
     private async Task ProcessFeedSession(BeginFeedRequest beginRequest, Stream stream)
     {
-
         try
         {
             if (IsNullOrWhiteSpace(beginRequest.CollectionName))
@@ -289,25 +274,21 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
             var collections = Store.GetCollections();
             if (collections.All(c => c.Name != collectionName))
-            {
                 throw new CacheException($"Collection {collectionName} does not exist");
-            }
 
             var oldVersion = collections.FirstOrDefault(c => c.Name == collectionName)?.LastVersion;
             if (oldVersion == collectionVersion)
-            {
                 throw new CacheException($"Collection {collectionName} already has version {collectionVersion}");
-            }
 
-            if (oldVersion != null && Compare(oldVersion, collectionVersion, StringComparison.InvariantCultureIgnoreCase) > 0)
-            {
+            if (oldVersion != null &&
+                Compare(oldVersion, collectionVersion, StringComparison.InvariantCultureIgnoreCase) > 0)
                 throw new CacheException($"Collection {collectionName} already has a newer version {oldVersion}");
-            }
 
             // If we reach this point, we can start the feeding process. Let the client know about it
             await stream.WriteMessageAsync(new StatusResponse(), CancellationToken.None);
 
-            Logger.LogInformation("Begin feeding collection {Collection}. New version is {Version}", beginRequest.CollectionName, beginRequest.CollectionVersion);
+            Logger.LogInformation("Begin feeding collection {Collection}. New version is {Version}",
+                beginRequest.CollectionName, beginRequest.CollectionVersion);
 
             var feederTask = StartCollectionFeeder(beginRequest.CollectionName, beginRequest.CollectionVersion);
 
@@ -315,10 +296,8 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
             _internalChannel = Channel.CreateBounded<FeedItem>(1_000_000);
 
             foreach (var item in ReadItems(stream))
-            {
                 await _internalChannel!.Writer.WriteAsync(item, CancellationToken.None);
-            }
-        
+
             _internalChannel.Writer.Complete();
 
             await feederTask;
@@ -326,45 +305,45 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
             Logger.LogInformation("Feeding collection {Collection} completed", beginRequest.CollectionName);
 
             await stream.WriteMessageAsync(new StatusResponse(), CancellationToken.None);
-
         }
         catch (Exception e)
         {
-            Logger.LogError("Error while processing feed session for collection {Collection} {Version}: {Message}", beginRequest.CollectionName, beginRequest.CollectionVersion,  e.Message);
-            await stream.WriteMessageAsync(new StatusResponse{ErrorMessage = e.Message, Success = false}, CancellationToken.None);
+            Logger.LogError("Error while processing feed session for collection {Collection} {Version}: {Message}",
+                beginRequest.CollectionName, beginRequest.CollectionVersion, e.Message);
+            await stream.WriteMessageAsync(new StatusResponse { ErrorMessage = e.Message, Success = false },
+                CancellationToken.None);
         }
-
     }
 
-    
+
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         Logger.LogInformation("Stopping TCP server...");
 
+        if (_disposed) return;
+
         // Cancel the internal token source to stop the server
         await _cts.CancelAsync();
 
-        _listener.Dispose();
+        _listener?.Dispose();
+
+        _cts.Dispose();
+
+        _disposed = true;
 
         await Task.Delay(200, cancellationToken);
-
     }
 
-    async IAsyncEnumerable<Item> ItemsFromChannel()
+    private async IAsyncEnumerable<Item> ItemsFromChannel()
     {
         if (_internalChannel == null)
             throw new InvalidOperationException("Internal channel is not initialized");
 
-        await foreach (var item in _internalChannel.Reader.ReadAllAsync())
-        {
-            yield return new Item(item.Data, item.Keys);
-        }
+        await foreach (var item in _internalChannel.Reader.ReadAllAsync()) yield return new Item(item.Data, item.Keys);
     }
 
     private Task StartCollectionFeeder(string collectionName, string collectionVersion)
     {
-        
-
         var task = Task.Run(async () =>
         {
             try
@@ -379,5 +358,4 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
         return task;
     }
-
 }

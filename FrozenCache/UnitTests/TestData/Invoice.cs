@@ -69,7 +69,7 @@ namespace UnitTests.TestData
         public long ProductId { get; set; }
         
         [Key(1)]
-        public string ProductName { get; set; }
+        public string? ProductName { get; set; }
 
         [Key(2)]
         public decimal UnitPrice { get; set; }

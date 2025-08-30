@@ -42,11 +42,15 @@ public class Aggregator
         }
 
         // Round-robin selection of the next available pool
-        var pool = _pools[_lastServer % connected.Length];
+        var pool = connected[_lastServer % connected.Length];
         
         _lastServer = (_lastServer + 1) % connected.Length; // Round-robin selection
 
-        return await pool.Get();
+        if(pool.IsConnected)
+            return await pool.Get();
+
+        // If the selected pool is not connected, try to get from another pool
+        return await Get();
     }
 
     private void Return(Connector connector)
@@ -57,9 +61,7 @@ public class Aggregator
         if(pool != null)
         {
             pool.Return(connector);
-
         }
-        
     }
 
     /// <summary>
@@ -113,23 +115,29 @@ public class Aggregator
     public async Task<List<byte[]>> QueryRawDataByPrimaryKey(string collection, params long[] keys)
     {
         
-        var connector = await Get();
+        Connector? connector = null;
         try
         {
+            connector = await Get();
             return await connector.QueryByPrimaryKey(collection, keys);
         }
         catch (Exception)
         {
-            var serverAddress = connector.Address;
-            var pool = _pools.FirstOrDefault(p => p.Address == serverAddress);
-            pool?.MarkAsNotConnected();
+            if (connector != null)
+            {
+                var serverAddress = connector.Address;
+                var pool = _pools.FirstOrDefault(p => p.Address == serverAddress);
+                pool?.MarkAsNotConnected();
+            }
+            
             // try another server
             return await QueryRawDataByPrimaryKey(collection, keys);
 
         }
         finally
         {
-            Return(connector);
+            if (connector != null)
+                Return(connector);
         }
     }
 
