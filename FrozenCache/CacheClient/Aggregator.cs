@@ -12,8 +12,6 @@ public class Aggregator
 {
     private readonly List<ConnectorPool> _pools = [];
 
-    private readonly (string server, int port)[] _servers;
-
     /// <summary>
     /// Creates an aggregator for multiple cache server replicas.
     /// </summary>
@@ -23,9 +21,7 @@ public class Aggregator
     {
         if (servers == null || servers.Length == 0) throw new ArgumentNullException(nameof(servers), "At least one server must be specified");
 
-        _servers = servers;
-
-        foreach (var (server, port) in _servers)
+        foreach (var (server, port) in servers)
         {
             _pools.Add(new ConnectorPool(capacity, server, port));
         }

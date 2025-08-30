@@ -15,10 +15,10 @@ namespace UnitTests;
 // initialized by setup
 #pragma warning disable CS8618
 
-/// <summary>
-/// Check integration between <see cref="Connector"/> <see cref="HostedTcpServer"/> and <see cref="DataStore"/>
-/// </summary>
-public class IntegrationTest
+    /// <summary>
+    /// Check integration between <see cref="Connector"/> <see cref="HostedTcpServer"/> and <see cref="DataStore"/>
+    /// </summary>
+    public class IntegrationTest
 {
     const string StoreName = "teststore";
 

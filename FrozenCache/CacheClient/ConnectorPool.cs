@@ -221,6 +221,8 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
         _watchDogTask.Dispose();
 
         _cancellationTokenSource.Dispose();
+
+        foreach (var connector in _pool) connector.Dispose();
     }
 
     /// <summary>
@@ -229,5 +231,9 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
     public void MarkAsNotConnected()
     {
         IsConnected = false;
+        
+        foreach (var connector in _pool) connector.Dispose();
+        
+        _pool.Clear();
     }
 }

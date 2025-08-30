@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using PersistentStore;
 using Serilog;
+using Microsoft.Extensions.Hosting.WindowsServices;
 
 namespace FrozenCache;
 
@@ -9,10 +10,24 @@ internal static class Program
     public static void Main(string[] args)
     {
 
-        // create or open the datastore before application starts
-        var store = new DataStore("data");
+        
+        // when run in windows service mode, by default the working directory is C:\Windows\System32
+        var currentDirectory = AppContext.BaseDirectory;
+        Directory.SetCurrentDirectory(currentDirectory);
+
+        // get the configuration before building the app
+        IConfiguration config = new ConfigurationBuilder()
+            .AddJsonFile("appsettings.json")
+            .AddEnvironmentVariables()
+            .Build();
 
         
+        var dataPath = config.GetSection("PathSettings")["DataPath"] ?? "data";
+        var logPath = config.GetSection("PathSettings")["LogPath"] ?? "logs";
+
+        // create or open the datastore before application starts
+        var store = new DataStore(dataPath);
+
 
         ////////////////////////////////
         // Dependency injection
@@ -25,7 +40,7 @@ internal static class Program
                 .MinimumLevel.Override("System", Serilog.Events.LogEventLevel.Information)
                 .Enrich.FromLogContext()
                 .WriteTo.Console()
-                .WriteTo.File("logs/log.txt", rollingInterval: RollingInterval.Day, retainedFileCountLimit: 7)
+                .WriteTo.File($"{logPath}/log.txt", rollingInterval: RollingInterval.Day, retainedFileCountLimit: 7)
             );
         
 
@@ -34,13 +49,19 @@ internal static class Program
             options.SerializerOptions.TypeInfoResolverChain.Insert(0, FrozenCache.AppJsonSerializerContext.Default);
         });
 
+        builder.Host.UseWindowsService(o =>
+        {
+            o.ServiceName = "FrozenCache Service";
+        }).UseSystemd();
+
         builder.Services.AddHostedService<HostedTcpServer>();
 
         builder.Services.AddSingleton<IDataStore>(store);
 
         builder
             .Services
-            .Configure<ServerSettings>(builder.Configuration.GetSection("ServerSettings"));
+            .Configure<ServerSettings>(builder.Configuration.GetSection("ServerSettings"))
+            ;
 
         var app = builder.Build();
 

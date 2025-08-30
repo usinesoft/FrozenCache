@@ -77,7 +77,7 @@ namespace PerTest
             long[] ids = new long[batchSize];
 
             for (int i = 0; i < batchSize; i++)
-                ids[i] = random.NextInt64(2_000_000);
+                ids[i] = random.NextInt64(maxId);
 
 
             var watch = Stopwatch.StartNew();
