@@ -12,6 +12,9 @@ namespace PersistentStore;
 public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
 {
     private readonly Dictionary<string, CollectionStore> _collectionStores = new();
+    
+    private  Dictionary<string, CollectionMetadata> _metadataByCollection= new();
+
 
     public DataStore(string rootPath)
     {
@@ -54,10 +57,13 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
             File.WriteAllText(Path.Combine(path, "metadata.json"), json);
         }
 
+        LoadCollectionsMetadata();
         
     }
 
-    public CollectionMetadata[] GetCollections()
+
+
+    public void LoadCollectionsMetadata()
     {
         var collectionDirs = Directory.EnumerateDirectories(RootPath).ToList();
 
@@ -83,7 +89,9 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
                 collections[i].LastVersion = versions[^1];
         }
 
-        return collections;
+        _metadataByCollection = collections.ToDictionary(c => c.Name, c => c);
+
+
     }
 
     public void DropCollection(string name)
@@ -100,6 +108,8 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         if (!Directory.Exists(path)) throw new CacheException("Collection not found");
 
         Directory.Delete(path, true);
+
+        LoadCollectionsMetadata();
     }
 
 
@@ -113,11 +123,16 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
 
         _opened = true;
 
+        _metadataByCollection.Clear();
+
         Directory.EnumerateDirectories(RootPath).ToList().ForEach(dir =>
         {
             var metadataPath = Path.Combine(dir, "metadata.json");
+            
             if (!File.Exists(metadataPath)) throw new CacheException($"Metadata file not found in {dir}");
+            
             var json = File.ReadAllText(metadataPath);
+            
             var metadata = JsonSerializer.Deserialize<CollectionMetadata>(json, AppJsonSerializerContext.Default.CollectionMetadata) ??
                            throw new CacheException("Failed to deserialize collection metadata");
 
@@ -128,6 +143,10 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
             string? lastVersion = allVersionsDirectories.Count > 0
                 ? Path.GetFileName(allVersionsDirectories[^1])
                 : null;
+
+            metadata.LastVersion = lastVersion;
+
+            _metadataByCollection[metadata.Name] = metadata;
 
             logger?.LogInformation("Opening collection {CollectionName} with last version {LastVersion}",
                 metadata.Name, lastVersion);
@@ -187,6 +206,8 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         if (_collectionStores.TryGetValue(collectionName, out var store)) store.Dispose();
         _collectionStores[collectionName] = collectionStore;
 
+        LoadCollectionsMetadata();
+
     }
 
     public int FeedCollection(string collectionName, string newVersion, IEnumerable<Item> items)
@@ -219,6 +240,38 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         EndFeed(collectionStore, collectionName);
 
         return itemsCount;
+    }
+
+    public CollectionsDescription GetCollectionInformation()
+    {
+        var description = new CollectionsDescription();
+        
+        foreach (var store in _collectionStores)
+        {
+            var collectionName = store.Key;
+
+            var collectionMetadata = _metadataByCollection[collectionName];
+
+            var collectionInfo = new CollectionInformation
+            {
+                Count = store.Value.ObjectCount,
+                Keys = collectionMetadata.Indexes.Select(i => i.Name).ToArray(),
+                LastVersion = collectionMetadata.LastVersion!,
+                MaxObjectsPerSegment = collectionMetadata.MaxItemsInFile,
+                SegmentFileSize = collectionMetadata.FileSize,
+                SizeInBytes = store.Value.TotalSizeInBytes,
+            };
+
+            description.CollectionInformation[collectionName] = collectionInfo;
+
+        }
+
+        return description;
+    }
+
+    public CollectionMetadata? GetCollectionMetadata(string collectionName)
+    {
+        return _metadataByCollection.GetValueOrDefault(collectionName);
     }
 
     public async ValueTask DisposeAsync()

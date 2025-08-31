@@ -1,7 +1,9 @@
 ﻿using System.Diagnostics;
+using Messages;
 using Microsoft.Extensions.Logging;
 using PersistentStore;
 
+namespace UnitTests;
 
 public class NullDataStore : IDataStore
 {
@@ -9,6 +11,29 @@ public class NullDataStore : IDataStore
     {
 
     }
+
+    public CollectionsDescription GetCollectionInformation()
+    {
+        return new CollectionsDescription
+        {
+            CollectionInformation = new Dictionary<string, CollectionInformation>
+            {
+                {
+                    "testCollection", new CollectionInformation
+                    {
+                        Count = 1,
+                        SizeInBytes = 121,
+                        LastVersion = "v1",
+                        Keys = ["id"],
+                        SegmentFileSize = 1024 * 1024,
+                        MaxObjectsPerSegment = 1000
+                    }
+                }
+            }
+        };
+    }
+
+
 
     public CollectionMetadata[] GetCollections()
     {
@@ -67,5 +92,10 @@ public class NullDataStore : IDataStore
         Console.WriteLine($"Read {count} items in {watch.ElapsedMilliseconds} ms");
 
         return count;
+    }
+
+    public CollectionMetadata? GetCollectionMetadata(string collectionName)
+    {
+        return new CollectionMetadata("testCollection", "id");
     }
 }

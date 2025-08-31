@@ -45,6 +45,10 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 
     private int _firstFreeOffset;
 
+    public long TotalSizeInBytes { get; private set; }
+    public int ObjectCount { get; private set; }
+    public int NonUniqueKeys { get; private set; }
+
 
     /// <summary>
     ///     This is an index used to store documents by most discriminant key.
@@ -171,6 +175,8 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 
         _documentsInCurrentView++;
         _firstFreeOffset += documentWithKeys.Data.Length;
+
+        TotalSizeInBytes += documentWithKeys.Data.Length;
     }
 
     /// <summary>
@@ -263,6 +269,8 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
                 header.FileIndex = fileIndex; // enrich the header with the file index
 
                 IndexHeader(fileIndex, header);
+
+                TotalSizeInBytes += header.Length;
 
                 ptr += _documentHeaderSize;
             }
@@ -358,13 +366,15 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
             foreach (var key in _byMostDiscriminantKey.Keys)
                 _byMostDiscriminantKeyUnique.Remove(key);
 
+        var duplicatedValues = _byMostDiscriminantKey.Values.Sum(x => x.Length);
+        var uniqueValues = _byMostDiscriminantKeyUnique.Count;
+
+        NonUniqueKeys = duplicatedValues;
+        ObjectCount = duplicatedValues + uniqueValues;
+
+
         _logger?.LogInformation("Done post-processing index");
 
-
-//#pragma warning disable S1215
-//        GC.Collect();
-//#pragma warning restore S1215
-//        GC.WaitForPendingFinalizers();
     }
 
     public void EndOfFeed()

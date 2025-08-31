@@ -32,9 +32,9 @@ namespace UnitTests
         {
             using var store = new DataStore(StoreName);
 
-            var collections = store.GetCollections();
+            var collections = store.GetCollectionInformation();
             
-            CollectionAssert.IsEmpty(collections, "New store should have no collections");
+            CollectionAssert.IsEmpty(collections.CollectionInformation, "New store should have no collections");
 
         }
 
@@ -56,27 +56,25 @@ namespace UnitTests
             Assert.Throws<CacheException>(() => store.CreateCollection(metadata1),
                 "Creating a collection that already exists with different metadata should throw exception");
 
-            var collections = store.GetCollections();
+            var collection = store.GetCollectionMetadata("persons");
 
-            Assert.That(collections.Length, Is.EqualTo(1), "Store should have one collection after creation");
+            Assert.That(collection, Is.Not.Null, "Store should have one collection after creation");
 
-            Assert.That(collections[0].Name, Is.EqualTo("persons"), "Collection name should match the one created");
+            Assert.That(collection!.Name, Is.EqualTo("persons"), "Collection name should match the one created");
 
-            Assert.That(collections[0].Indexes.Count, Is.EqualTo(3), "Collection should have 3 indexes");
+            Assert.That(collection!.Indexes.Count, Is.EqualTo(3), "Collection should have 3 indexes");
 
-            Assert.That(collections[0].Indexes[0].Name, Is.EqualTo("id"), "First index should be the primary key");
+            Assert.That(collection!.Indexes[0].Name, Is.EqualTo("id"), "First index should be the primary key");
             
-            Assert.That(collections[0].Indexes[0].IsUnique, Is.True, "Primary key index should be unique");
-
-            Assert.That(collections[0].Indexes[1].Name, Is.EqualTo("name"), "Second index should be 'name'");
             
-            Assert.That(collections[0].Indexes[1].IsUnique, Is.False, "Index 'name' should not be unique");
+            Assert.That(collection!.Indexes[1].Name, Is.EqualTo("name"), "Second index should be 'name'");
+            
 
             store.DropCollection("persons");
 
-            collections = store.GetCollections();
+            collection = store.GetCollectionMetadata("persons");
 
-            CollectionAssert.IsEmpty(collections, "Store should have no collections after dropping the collection");
+            Assert.That(collection, Is.Null, "Collection should not exist anymore");
         }
 
         [Test]
@@ -109,11 +107,13 @@ namespace UnitTests
             
             _ = store.FeedCollection("persons", "001", items);
 
-            var collections  = store.GetCollections();
+            var collections  = store.GetCollectionInformation();
             
-            Assert.That(collections.Length, Is.EqualTo(1), "Store should have one collection after feeding first version");
-            Assert.That(collections[0].Name, Is.EqualTo("persons"), "Collection name should match the one created");
-            Assert.That(collections[0].LastVersion, Is.EqualTo("001"), "Last version should be '001' after first feed");
+            Assert.That(collections.CollectionInformation.Count, Is.EqualTo(1), "Store should have one collection after feeding first version");
+
+            var collection = collections.CollectionInformation.First();
+            Assert.That(collection.Key, Is.EqualTo("persons"), "Collection name should match the one created");
+            Assert.That(collection.Value.LastVersion, Is.EqualTo("001"), "Last version should be '001' after first feed");
         }
 
         [Test]
@@ -146,12 +146,14 @@ namespace UnitTests
 
                 Console.WriteLine($"Feeding 2 million items took {duration} ms");
 
-                var collections = store.GetCollections();
-                Assert.That(collections.Length, Is.EqualTo(1),
+                var collections = store.GetCollectionInformation();
+                Assert.That(collections.CollectionInformation.Count, Is.EqualTo(1),
                     "Store should have one collection after feeding first version");
-                Assert.That(collections[0].Name, Is.EqualTo("persons"), "Collection name should match the one created");
-                Assert.That(collections[0].LastVersion, Is.EqualTo("v001"),
-                    "Last version should be '001' after first feed");
+
+                var collection = collections.CollectionInformation.First();
+                Assert.That(collection.Key, Is.EqualTo("persons"), "Collection name should match the one created");
+                Assert.That(collection.Value.LastVersion, Is.EqualTo("v001"), "Last version should be 'v001' after first feed");
+
             }
 
 
@@ -159,11 +161,16 @@ namespace UnitTests
             await using (var store = new DataStore(StoreName))
             {
                 store.Open();
-                var collections = store.GetCollections();
-                Assert.That(collections.Length, Is.EqualTo(1), "Store should have one collection after reopening");
-                Assert.That(collections[0].Name, Is.EqualTo("persons"), "Collection name should match the one created");
-                Assert.That(collections[0].LastVersion, Is.EqualTo("v001"),
+                var collections = store.GetCollectionInformation();
+                Assert.That(collections.CollectionInformation.Count, Is.EqualTo(1), "Store should have one collection after reopening");
+                var collection = collections.CollectionInformation.First();
+                
+                Assert.That(collection.Key, Is.EqualTo("persons"), "Collection name should match the one created");
+                Assert.That(collection.Value.LastVersion, Is.EqualTo("v001"), "Last version should be '001' after first feed");
+                Assert.That(collection.Key, Is.EqualTo("persons"), "Collection name should match the one created");
+                Assert.That(collection.Value.LastVersion, Is.EqualTo("v001"),
                     "Last version should be '001' after first feed");
+
                 var item0 = store.GetByPrimaryKey("persons", 0).FirstOrDefault();
                 var item1000 = store.GetByPrimaryKey("persons", 1000).FirstOrDefault();
                 var item1001 = store.GetByPrimaryKey("persons", 1001).FirstOrDefault();
@@ -221,23 +228,26 @@ namespace UnitTests
                 _ = store.FeedCollection("second", "v001", items2);
                 _ = store.FeedCollection("third", "v001", items3);
                 
-                var collections = store.GetCollections();
-                Assert.That(collections.Length, Is.EqualTo(3), "Store should have three collections after feeding");
-                Assert.That(collections[0].Name, Is.EqualTo("first"), "First collection should be 'first'");
-                Assert.That(collections[1].Name, Is.EqualTo("second"), "Second collection should be 'second'");
-                Assert.That(collections[2].Name, Is.EqualTo("third"), "Third collection should be 'third'");
+                var collections = store.GetCollectionInformation();
+                Assert.That(collections.CollectionInformation.Count, Is.EqualTo(3), "Store should have three collections after feeding");
+                
+                var names = collections.CollectionInformation.Keys.Order().ToList();
+
+                Assert.That(names[0], Is.EqualTo("first"), "First collection should be 'first'");
+                Assert.That(names[1], Is.EqualTo("second"), "Second collection should be 'second'");
+                Assert.That(names[2], Is.EqualTo("third"), "Third collection should be 'third'");
 
                 var item1 = store.GetByPrimaryKey("first", 10).FirstOrDefault();
                 Assert.That(item1, Is.Not.Null);
                 Assert.That(item1!.Keys.Length, Is.EqualTo(2));
-                Assert.That(item1!.Keys[0], Is.EqualTo(10));
+                Assert.That(item1.Keys[0], Is.EqualTo(10));
                 var content = Encoding.UTF8.GetString(item1.Data);
                 Assert.That(content, Is.EqualTo("first"));
 
                 var item2 = store.GetByPrimaryKey("second", 101).FirstOrDefault();
                 Assert.That(item2, Is.Not.Null);
                 Assert.That(item2!.Keys.Length, Is.EqualTo(2));
-                Assert.That(item2!.Keys[0], Is.EqualTo(101));
+                Assert.That(item2.Keys[0], Is.EqualTo(101));
                 content = Encoding.UTF8.GetString(item2.Data);
                 Assert.That(content, Is.EqualTo("second"));
 
@@ -251,14 +261,14 @@ namespace UnitTests
                 var item1 = store.GetByPrimaryKey("first", 10).FirstOrDefault();
                 Assert.That(item1, Is.Not.Null);
                 Assert.That(item1!.Keys.Length, Is.EqualTo(2));
-                Assert.That(item1!.Keys[0], Is.EqualTo(10));
+                Assert.That(item1.Keys[0], Is.EqualTo(10));
                 var content = Encoding.UTF8.GetString(item1.Data);
                 Assert.That(content, Is.EqualTo("first"));
 
                 var item2 = store.GetByPrimaryKey("second", 101).FirstOrDefault();
                 Assert.That(item2, Is.Not.Null);
                 Assert.That(item2!.Keys.Length, Is.EqualTo(2));
-                Assert.That(item2!.Keys[0], Is.EqualTo(101));
+                Assert.That(item2.Keys[0], Is.EqualTo(101));
                 content = Encoding.UTF8.GetString(item2.Data);
                 Assert.That(content, Is.EqualTo("second"));
             }

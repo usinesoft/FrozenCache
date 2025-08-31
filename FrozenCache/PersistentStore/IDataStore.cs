@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using Messages;
+using Microsoft.Extensions.Logging;
 
 namespace PersistentStore;
 
@@ -21,7 +22,7 @@ public interface IDataStore
     /// Retrieves all available collections in the data store.
     /// </summary>
     /// <returns></returns>
-    public CollectionMetadata[] GetCollections();
+    public CollectionsDescription GetCollectionInformation();
 
     public void DropCollection(string name);
 
@@ -57,6 +58,8 @@ public interface IDataStore
     /// <param name="items"></param>
     /// <returns></returns>
     public Task<int> FeedCollectionAsync(string collectionName, string newVersion, IAsyncEnumerable<Item> items);
+
+    public CollectionMetadata? GetCollectionMetadata(string collectionName);
 
 }
 

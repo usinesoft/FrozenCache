@@ -272,11 +272,11 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
             var collectionName = beginRequest.CollectionName;
             var collectionVersion = beginRequest.CollectionVersion;
 
-            var collections = Store.GetCollections();
-            if (collections.All(c => c.Name != collectionName))
+            var metadata = Store.GetCollectionMetadata(collectionName);
+            if (metadata == null)
                 throw new CacheException($"Collection {collectionName} does not exist");
 
-            var oldVersion = collections.FirstOrDefault(c => c.Name == collectionName)?.LastVersion;
+            var oldVersion = metadata.LastVersion;
             if (oldVersion == collectionVersion)
                 throw new CacheException($"Collection {collectionName} already has version {collectionVersion}");
 

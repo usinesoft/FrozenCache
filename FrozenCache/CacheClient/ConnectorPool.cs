@@ -11,7 +11,9 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
 {
     private readonly Queue<Connector> _pool = new();
 
-    private readonly SemaphoreSlim _lock;
+    private readonly SemaphoreSlim _semaphore;
+
+    private readonly Lock _pooLock = new();
 
     public string Address { get; }
 
@@ -50,7 +52,7 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
 
         _capacity = capacity;
 
-        _lock = new SemaphoreSlim(capacity, capacity);
+        _semaphore = new SemaphoreSlim(capacity, capacity);
         InternalConnect();
 
         var tk = _cancellationTokenSource.Token;
@@ -120,7 +122,13 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
                     if (!serverUp)
                     {
                         IsConnected = false;
-                        _pool.Clear();
+
+                        lock (_pooLock)
+                        {
+                            _pool.Clear();
+                        }
+                        
+                        
                         Debug.Print("watchdog : server is down, clearing pool and marking as not connected");
                     }
 
@@ -156,13 +164,16 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
 
     private void InternalConnect()
     {
-        for (var i = 0; i < _capacity; i++)
+        lock (_pooLock)
         {
-            var connector = new Connector(_server, _port);
-            if (connector.Connect()) _pool.Enqueue(connector);
-        }
+            for (var i = 0; i < _capacity; i++)
+            {
+                var connector = new Connector(_server, _port);
+                if (connector.Connect()) _pool.Enqueue(connector);
+            }
 
-        IsConnected = _pool.Count > 0;
+            IsConnected = _pool.Count > 0;
+        }
     }
 
 
@@ -176,9 +187,12 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
             throw new InvalidOperationException(
                 "The pool is not connected to the server. Please check the connection status.");
 
-        await _lock.WaitAsync();
+        await _semaphore.WaitAsync();
 
-        return _pool.Dequeue();
+        lock (_pooLock)
+        {
+            return _pool.Dequeue();
+        }
     }
 
     /// <summary>
@@ -190,9 +204,12 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
         if (connector == null) throw new ArgumentNullException(nameof(connector), "Connector cannot be null");
 
 
-        _pool.Enqueue(connector);
+        lock (_pooLock)
+        {
+            _pool.Enqueue(connector);
+        }
 
-        _lock.Release();
+        _semaphore.Release();
     }
 
     public void Dispose()
@@ -201,13 +218,16 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
 
         _watchDogTask.Wait();
 
-        _lock.Dispose();
+        _semaphore.Dispose();
 
         _watchDogTask.Dispose();
 
         _cancellationTokenSource.Dispose();
 
-        foreach (var connector in _pool) connector.Dispose();
+        lock (_pooLock)
+        {
+            foreach (var connector in _pool) connector.Dispose();
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -216,13 +236,16 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
 
         await _watchDogTask.WaitAsync(CancellationToken.None);
 
-        _lock.Dispose();
+        _semaphore.Dispose();
 
         _watchDogTask.Dispose();
 
         _cancellationTokenSource.Dispose();
 
-        foreach (var connector in _pool) connector.Dispose();
+        lock (_pooLock)
+        {
+            foreach (var connector in _pool) connector.Dispose();
+        }
     }
 
     /// <summary>
@@ -230,10 +253,14 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
     /// </summary>
     public void MarkAsNotConnected()
     {
-        IsConnected = false;
+        lock (_pooLock)
+        {
+            IsConnected = false;
         
-        foreach (var connector in _pool) connector.Dispose();
+            foreach (var connector in _pool) connector.Dispose();
+            _pool.Clear();
+        }
         
-        _pool.Clear();
+        
     }
 }

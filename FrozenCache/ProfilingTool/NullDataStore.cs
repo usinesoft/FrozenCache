@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using Messages;
 using Microsoft.Extensions.Logging;
 using PersistentStore;
 
@@ -11,10 +12,11 @@ public class NullDataStore : IDataStore
 
     }
 
-    public CollectionMetadata[] GetCollections()
+    public CollectionsDescription GetCollectionInformation()
     {
         throw new NotImplementedException();
     }
+
 
     public void DropCollection(string name)
     {
@@ -63,5 +65,10 @@ public class NullDataStore : IDataStore
         Console.WriteLine($"Read {count} items in {watch.ElapsedMilliseconds} ms");
 
         return count;
+    }
+
+    public CollectionMetadata? GetCollectionMetadata(string collectionName)
+    {
+        throw new NotImplementedException();
     }
 }
