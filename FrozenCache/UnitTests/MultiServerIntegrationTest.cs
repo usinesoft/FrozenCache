@@ -159,6 +159,11 @@ public class MultiServerIntegrationTest
         // try to query again
         for (var i = 0; i < 10; i++) ids[i] = rg.Next(1, 100_000) * 2;
 
+        collectionsByServer = await aggregator.GetCollectionsDescription();
+        Assert.That(collectionsByServer[0], Is.Null, "Should only return collections information for connected servers");
+        Assert.That(collectionsByServer[1], Is.Not.Null, "Should only return collections information for connected servers");
+        Assert.That(collectionsByServer[2], Is.Not.Null, "Should only return collections information for connected servers");
+
         var invoices2 = await aggregator.QueryByPrimaryKey<Invoice>("invoices", ids);
         Assert.That(invoices2, Is.Not.Null, "Result should not be null");
         Console.WriteLine($"Queried {invoices2.Count} objects after one server was stopped");

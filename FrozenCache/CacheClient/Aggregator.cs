@@ -130,12 +130,13 @@ public class Aggregator
             try
             {
                 result[i] = await connector.GetCollectionsDescription();
+                Return(connector);
             }
-            catch (SocketException)
+            catch (Exception)
             {
 
                 pool.MarkAsNotConnected();
-                throw;
+                result[i] = null;
             }
         });
 
