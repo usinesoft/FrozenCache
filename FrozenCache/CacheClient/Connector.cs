@@ -17,6 +17,8 @@ public sealed class Connector(string host, int port) : IDisposable
 
     public string Address => $"{host}:{port}";
 
+    public bool IsHealthy => _client?.Connected == true && _stream != null;
+
     public bool Connect()
     {
         if (_client != null) throw new InvalidOperationException("Already connected");
@@ -271,10 +273,14 @@ public sealed class Connector(string host, int port) : IDisposable
         return results;
     }
 
+    private bool _disposed;
     public void Dispose()
-    {
+    { 
+        if (_disposed) return;
+        _disposed = true;
+        _stream?.Dispose();
         _client?.Dispose();
     }
 
-    
+
 }

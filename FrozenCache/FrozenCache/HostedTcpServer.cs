@@ -24,7 +24,7 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
     private readonly CancellationTokenSource _cts = new();
 
-    private Channel<FeedItem>? _internalChannel;
+
     public int Port { get; private set; }
 
     private readonly FeedItemBatchSerializer _batchSerializer = new();
@@ -97,9 +97,9 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
     private async Task ClientLoop(CancellationToken cancellationToken, TcpClient client)
     {
-        await using var stream = client.GetStream();
         try
         {
+            await using var stream = client.GetStream();
             while (!cancellationToken.IsCancellationRequested)
             {
                 var message = await stream.ReadMessageAsync(cancellationToken);
@@ -140,7 +140,7 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
                     default:
                         Logger.LogWarning("Unknown message type received: {Type}", message.GetType().Name);
                         await stream.WriteMessageAsync(new StatusResponse
-                        { Success = false, ErrorMessage = "Unknown message type" }, cancellationToken);
+                            { Success = false, ErrorMessage = "Unknown message type" }, cancellationToken);
                         break;
                 }
             }
@@ -149,24 +149,26 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         {
             // Client disconnected or operation was cancelled
             Logger.LogWarning("Cancellation requested");
-            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = "Operation cancelled" },
+            await client.GetStream().WriteMessageAsync(
+                new StatusResponse { Success = false, ErrorMessage = "Operation cancelled" },
                 cancellationToken);
         }
         catch (CacheException cacheEx)
         {
             Logger.LogError("Cache error processing client request: {Message}", cacheEx.Message);
-            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = cacheEx.Message },
+            await client.GetStream().WriteMessageAsync(
+                new StatusResponse { Success = false, ErrorMessage = cacheEx.Message },
                 cancellationToken);
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Error processing client request: {Message}", ex.Message);
-            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = ex.Message },
+            await client.GetStream().WriteMessageAsync(
+                new StatusResponse { Success = false, ErrorMessage = ex.Message },
                 cancellationToken);
         }
         finally
         {
-            stream.Close();
             client.Close();
         }
     }
@@ -204,7 +206,7 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
             var result = new ResultWithData { CollectionName = queryRequest.CollectionName };
 
-            List<byte[]> temp = new List<byte[]>();
+            var temp = new List<byte[]>();
 
             foreach (var keyValue in queryRequest.PrimaryKeyValues)
             {
@@ -270,6 +272,8 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
     private async Task ProcessFeedSession(BeginFeedRequest beginRequest, Stream stream)
     {
+        
+
         try
         {
             if (IsNullOrWhiteSpace(beginRequest.CollectionName))
@@ -299,15 +303,15 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
             Logger.LogInformation("Begin feeding collection {Collection}. New version is {Version}",
                 beginRequest.CollectionName, beginRequest.CollectionVersion);
 
-            var feederTask = StartCollectionFeeder(beginRequest.CollectionName, beginRequest.CollectionVersion);
+            var internalChannel = Channel.CreateBounded<FeedItem>(1_000_000);
 
-
-            _internalChannel = Channel.CreateBounded<FeedItem>(1_000_000);
+            var feederTask = StartCollectionFeeder(beginRequest.CollectionName, beginRequest.CollectionVersion,
+                internalChannel);
 
             foreach (var item in ReadItems(stream))
-                await _internalChannel!.Writer.WriteAsync(item, CancellationToken.None);
+                await internalChannel.Writer.WriteAsync(item, CancellationToken.None);
 
-            _internalChannel.Writer.Complete();
+            internalChannel.Writer.Complete();
 
             await feederTask;
 
@@ -343,21 +347,22 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         await Task.Delay(200, cancellationToken);
     }
 
-    private async IAsyncEnumerable<Item> ItemsFromChannel()
+    private static async IAsyncEnumerable<Item> ItemsFromChannel(Channel<FeedItem> channel)
     {
-        if (_internalChannel == null)
+        if (channel == null)
             throw new InvalidOperationException("Internal channel is not initialized");
 
-        await foreach (var item in _internalChannel.Reader.ReadAllAsync()) yield return new Item(item.Data, item.Keys);
+        await foreach (var item in channel.Reader.ReadAllAsync()) yield return new Item(item.Data, item.Keys);
     }
 
-    private Task StartCollectionFeeder(string collectionName, string collectionVersion)
+    private Task StartCollectionFeeder(string collectionName, string collectionVersion,
+        Channel<FeedItem> internalChannel)
     {
         var task = Task.Run(async () =>
         {
             try
             {
-                await Store.FeedCollectionAsync(collectionName, collectionVersion, ItemsFromChannel());
+                await Store.FeedCollectionAsync(collectionName, collectionVersion, ItemsFromChannel(internalChannel));
             }
             catch (Exception e)
             {

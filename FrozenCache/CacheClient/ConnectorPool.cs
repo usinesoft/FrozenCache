@@ -1,4 +1,6 @@
 ﻿using System.Diagnostics;
+using System.IO;
+using System.Threading.Channels;
 
 namespace CacheClient;
 
@@ -9,12 +11,9 @@ namespace CacheClient;
 /// </summary>
 public sealed class ConnectorPool : IDisposable, IAsyncDisposable
 {
-    private readonly Queue<Connector> _pool = new();
+    private readonly Channel<Connector> _pool = Channel.CreateUnbounded<Connector>();
 
-    private readonly SemaphoreSlim _semaphore;
-
-    private readonly Lock _pooLock = new();
-
+    
     public string Address { get; }
 
     public bool IsConnected { get; private set; }
@@ -29,6 +28,15 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
     private readonly Task _watchDogTask;
 
     private readonly CancellationTokenSource _cancellationTokenSource = new();
+
+    private void ClearPool()
+    {
+        while(_pool.Reader.TryRead(out var connector))
+        {
+            connector.Dispose();
+        }
+    }
+    
 
     /// <summary>
     ///     Manage a pool of connectors to the cache server. If the pool is empty the client awaits for a connector to become
@@ -52,7 +60,6 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
 
         _capacity = capacity;
 
-        _semaphore = new SemaphoreSlim(capacity, capacity);
         InternalConnect();
 
         var tk = _cancellationTokenSource.Token;
@@ -123,11 +130,8 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
                     {
                         IsConnected = false;
 
-                        lock (_pooLock)
-                        {
-                            _pool.Clear();
-                        }
-                        
+                        ClearPool();
+
                         
                         Debug.Print("watchdog : server is down, clearing pool and marking as not connected");
                     }
@@ -164,16 +168,15 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
 
     private void InternalConnect()
     {
-        lock (_pooLock)
-        {
+        
             for (var i = 0; i < _capacity; i++)
             {
                 var connector = new Connector(_server, _port);
-                if (connector.Connect()) _pool.Enqueue(connector);
+                if (connector.Connect()) _pool.Writer.TryWrite(connector);
             }
 
-            IsConnected = _pool.Count > 0;
-        }
+            IsConnected = _pool.Reader.TryPeek(out _);
+        
     }
 
 
@@ -187,12 +190,8 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
             throw new InvalidOperationException(
                 "The pool is not connected to the server. Please check the connection status.");
 
-        await _semaphore.WaitAsync();
-
-        lock (_pooLock)
-        {
-            return _pool.Dequeue();
-        }
+        return await _pool.Reader.ReadAsync();
+        
     }
 
     /// <summary>
@@ -203,49 +202,49 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
     {
         if (connector == null) throw new ArgumentNullException(nameof(connector), "Connector cannot be null");
 
-
-        lock (_pooLock)
+        if (!connector.IsHealthy)
         {
-            _pool.Enqueue(connector);
+            connector.Dispose();
+            MarkAsNotConnected();
+            return;
         }
-
-        _semaphore.Release();
+        
+        _pool.Writer.TryWrite(connector);
     }
 
+    private bool _disposed;
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
+
         _cancellationTokenSource.Cancel();
 
         _watchDogTask.Wait();
 
-        _semaphore.Dispose();
-
         _watchDogTask.Dispose();
 
         _cancellationTokenSource.Dispose();
 
-        lock (_pooLock)
-        {
-            foreach (var connector in _pool) connector.Dispose();
-        }
+        ClearPool();
     }
+
+    
 
     public async ValueTask DisposeAsync()
     {
+        if (_disposed) return;
+        _disposed = true;
+
         await _cancellationTokenSource.CancelAsync();
 
         await _watchDogTask.WaitAsync(CancellationToken.None);
 
-        _semaphore.Dispose();
-
         _watchDogTask.Dispose();
 
         _cancellationTokenSource.Dispose();
 
-        lock (_pooLock)
-        {
-            foreach (var connector in _pool) connector.Dispose();
-        }
+        ClearPool();
     }
 
     /// <summary>
@@ -253,14 +252,10 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
     /// </summary>
     public void MarkAsNotConnected()
     {
-        lock (_pooLock)
-        {
-            IsConnected = false;
         
-            foreach (var connector in _pool) connector.Dispose();
-            _pool.Clear();
-        }
-        
-        
+        IsConnected = false;
+    
+        ClearPool();
+    
     }
 }
