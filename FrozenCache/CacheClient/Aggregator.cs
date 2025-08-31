@@ -1,4 +1,5 @@
-﻿using System.Net.Sockets;
+﻿using System.Collections;
+using System.Net.Sockets;
 using System.Threading.Channels;
 using Messages;
 using PersistentStore;
@@ -110,6 +111,35 @@ public class Aggregator
             }
         });
 
+    }
+
+    public async Task<CollectionsDescription?[]> GetCollectionsDescription()
+    {
+        var result = new CollectionsDescription?[_pools.Count];
+
+        await Parallel.ForAsync(0, _pools.Count, async(i, token) =>
+        {
+            var pool = _pools[i];
+
+            if (!pool.IsConnected)
+            {
+                result[i] = null;
+                return;
+            }
+            var connector = await pool.Get();
+            try
+            {
+                result[i] = await connector.GetCollectionsDescription();
+            }
+            catch (SocketException)
+            {
+
+                pool.MarkAsNotConnected();
+                throw;
+            }
+        });
+
+        return result;
     }
 
     public async Task<List<byte[]>> QueryRawDataByPrimaryKey(string collection, params long[] keys)

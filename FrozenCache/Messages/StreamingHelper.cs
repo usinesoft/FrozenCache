@@ -1,6 +1,8 @@
 ﻿using System.Buffers;
 using System.Diagnostics;
 using MessagePack;
+// ReSharper disable MethodHasAsyncOverload
+// ReSharper disable MethodSupportsCancellation
 #pragma warning disable S6966
 
 namespace Messages;
@@ -30,12 +32,12 @@ public static class StreamingHelper
         try
         {
 
-            
 
             switch (message.Type)
             {
                 case MessageType.Ping:
-                    // Ping is a special case, it has no data
+                case MessageType.GetCollectionsDescriptionRequest:
+                    // messages that do not have body
                     break;
 
                 case MessageType.BeginFeedRequest:
@@ -55,6 +57,9 @@ public static class StreamingHelper
                     break;
                 case MessageType.QueryResponse:
                     MessagePackSerializer.Serialize(_memoryStream, message as ResultWithData);
+                    break;
+                case MessageType.CollectionsDescription:
+                    MessagePackSerializer.Serialize(_memoryStream, message as CollectionsDescription);
                     break;
                 default:
                     throw new NotSupportedException("Unknown message type to stream");
@@ -97,7 +102,7 @@ public static class StreamingHelper
 
             int size = BitConverter.ToInt32(header, 4);
 
-            if (size < 0 || size > 1024 * 1024) // Arbitrary limit to prevent too large requests
+            if (size is < 0 or > 1024 * 1024) // Arbitrary limit to prevent too large requests
             {
                 throw new InvalidOperationException("Invalid request size.");
             }
@@ -109,8 +114,10 @@ public static class StreamingHelper
                     
                 return messageType switch
                 {
-                    // ping is a special case (empty message)
+                    // first the empty messages that do not have body so they do not need deserialization
                     MessageType.Ping => new PingMessage(),
+                    MessageType.GetCollectionsDescriptionRequest => new GetCollectionsDescriptionRequest(),
+                    MessageType.CollectionsDescription => MessagePackSerializer.Deserialize<CollectionsDescription>(buffer.AsMemory(0, size)),
                     MessageType.BeginFeedRequest => MessagePackSerializer.Deserialize<BeginFeedRequest>(buffer.AsMemory(0, size)),
                     MessageType.CreateCollectionRequest => MessagePackSerializer.Deserialize<CreateCollectionRequest>(buffer),
                     MessageType.DropCollectionRequest => MessagePackSerializer.Deserialize<DropCollectionRequest>(buffer),

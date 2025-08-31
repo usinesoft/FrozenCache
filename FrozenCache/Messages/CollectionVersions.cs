@@ -3,10 +3,13 @@
 namespace Messages;
 
 [MessagePackObject]
-public class CollectionsDescription
+public class CollectionsDescription:IMessage
 {
     [Key(0)]
     public Dictionary<string, CollectionInformation> CollectionInformation { get; set; } = [];
+
+    [IgnoreMember]
+    public MessageType Type => MessageType.CollectionsDescription;
 }
 
 [MessagePackObject]

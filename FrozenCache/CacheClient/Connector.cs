@@ -79,6 +79,24 @@ public sealed class Connector(string host, int port) : IDisposable
         }
     }
 
+
+    public async Task<CollectionsDescription> GetCollectionsDescription()
+    {
+        if (_client == null || _stream == null) throw new InvalidOperationException("Not connected to server");
+        var request = new GetCollectionsDescriptionRequest();
+        
+        await _stream.WriteMessageAsync(request, CancellationToken.None);
+
+        var response = await _stream.ReadMessageAsync(CancellationToken.None);
+
+        if (response is CollectionsDescription description)
+            return description;
+
+        var responseType = response == null ? "null" : response.GetType().Name;
+        throw new CacheException($"Unexpected response type: {responseType}");
+    }
+
+
     public async Task FeedCollection(string collectionName, string newVersion, IEnumerable<Item> items)
     {
         if (_client == null || _stream == null) throw new InvalidOperationException("Not connected to server");

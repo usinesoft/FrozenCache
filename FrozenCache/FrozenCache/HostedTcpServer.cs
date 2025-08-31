@@ -130,8 +130,17 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
                     case DropCollectionRequest dropCollectionRequest:
                         await ProcessDropCollection(dropCollectionRequest, stream, cancellationToken);
                         break;
+                    case GetCollectionsDescriptionRequest:
+                        var collections = Store.GetCollectionInformation();
+                        await stream.WriteMessageAsync(collections, cancellationToken);
+                        break;
                     case QueryByPrimaryKey queryRequest:
                         await ProcessSimpleQuery(queryRequest, stream, cancellationToken);
+                        break;
+                    default:
+                        Logger.LogWarning("Unknown message type received: {Type}", message.GetType().Name);
+                        await stream.WriteMessageAsync(new StatusResponse
+                        { Success = false, ErrorMessage = "Unknown message type" }, cancellationToken);
                         break;
                 }
             }

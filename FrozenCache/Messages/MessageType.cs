@@ -9,5 +9,7 @@ public enum MessageType
     StatusResponse = 6,
     QueryByPrimaryKeyRequest = 7,
     QueryResponse = 8,
-    DropCollectionRequest = 9
+    DropCollectionRequest = 9,
+    GetCollectionsDescriptionRequest = 10,
+    CollectionsDescription = 11
 }

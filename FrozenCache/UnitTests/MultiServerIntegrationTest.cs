@@ -101,6 +101,24 @@ public class MultiServerIntegrationTest
 
         await aggregator.FeedCollection("invoices", invoices);
 
+        // check the collections description on each server
+        var collectionsByServer = await aggregator.GetCollectionsDescription();
+        Assert.That(collectionsByServer.Count, Is.EqualTo(3), "There should be 3 servers");
+        string? lastVersion = null;
+        foreach (var collectionInfo in collectionsByServer)
+        {
+            Assert.That(collectionInfo, Is.Not.Null);
+            Assert.That(collectionInfo!.CollectionInformation.Count, Is.EqualTo(1), "There should be one collection");
+            var info = collectionInfo.CollectionInformation.Single();
+            Assert.That(info.Key, Is.EqualTo("invoices"), "Collection name should be 'invoices'");
+            Assert.That(info.Value.Count, Is.EqualTo(count), $"Collection should contain {count} objects ");
+            if (lastVersion != null)
+                Assert.That(info.Value.LastVersion, Is.EqualTo(lastVersion), "All servers should have the same version");
+            
+            lastVersion ??= info.Value.LastVersion;
+        }
+
+
         var result = await aggregator.QueryByPrimaryKey<Invoice>("invoices", 2, 4, 5);
         Assert.That(result, Is.Not.Null, "Result should not be null");
         Assert.That(result.Count, Is.EqualTo(2), "One object should be returned");
