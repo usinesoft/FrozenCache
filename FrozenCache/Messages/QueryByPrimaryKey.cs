@@ -15,7 +15,7 @@ public class QueryByPrimaryKey:IMessage
     {
     }
 
-    public QueryByPrimaryKey(string collectionName, params IEnumerable<long> primaryKeyValues)
+    public QueryByPrimaryKey(string collectionName, params long[] primaryKeyValues)
     {
         CollectionName = collectionName;
         PrimaryKeyValues = primaryKeyValues.ToArray();

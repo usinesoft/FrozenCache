@@ -1,0 +1,63 @@
+namespace CacheClient.LocalCache;
+
+/// <summary>
+///     Less recently used items are removed if the limit capacity is reached
+/// </summary>
+public class LruEvictionPolicy : EvictionPolicy
+{
+    private readonly EvictionQueue _evictionQueue = new();
+
+    public LruEvictionPolicy(int limit, int evictionCount)
+    {
+        if (limit <= 0)
+            throw new ArgumentException($"the {nameof(limit)} should be strictly positive", nameof(limit));
+
+        if (evictionCount <= 0)
+            throw new ArgumentException($"the {nameof(evictionCount)} should be strictly positive",
+                nameof(evictionCount));
+
+        if (limit <= evictionCount)
+            throw new ArgumentException($"the {nameof(limit)} should be strictly superior to {nameof(evictionCount)}");
+
+
+        _evictionQueue.Capacity = limit;
+        _evictionQueue.EvictionCount = evictionCount;
+    }
+
+    public override bool IsEvictionRequired => _evictionQueue.EvictionRequired;
+
+
+    public override EvictionType Type => EvictionType.LessRecentlyUsed;
+
+    public override void Clear()
+    {
+        _evictionQueue.Clear();
+    }
+
+    public override void AddItem(CachedItem item)
+    {
+        _evictionQueue.AddNew(item);
+    }
+
+    public override IList<CachedItem> DoEviction()
+    {
+        return _evictionQueue.Go();
+    }
+
+    public override void Touch(CachedItem item)
+    {
+        _evictionQueue.Touch(item);
+    }
+
+
+    public override void Touch(IList<CachedItem> items)
+    {
+        foreach (var t in items)
+            _evictionQueue.Touch(t);
+    }
+
+    public override string ToString()
+    {
+        return $"LRU({_evictionQueue.Capacity}, {_evictionQueue.EvictionCount})";
+    }
+}

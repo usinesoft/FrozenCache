@@ -1,5 +1,4 @@
-﻿using System.Collections;
-using System.Net.Sockets;
+﻿using System.Net.Sockets;
 using System.Threading.Channels;
 using Messages;
 using PersistentStore;
@@ -117,7 +116,7 @@ public class Aggregator
     {
         var result = new CollectionsDescription?[_pools.Count];
 
-        await Parallel.ForAsync(0, _pools.Count, async(i, token) =>
+        await Parallel.ForAsync(0, _pools.Count, async(i, _) =>
         {
             var pool = _pools[i];
 
