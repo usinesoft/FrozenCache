@@ -1,5 +1,6 @@
 ﻿using System.Net.Sockets;
 using System.Threading.Channels;
+using CacheClient.LocalCache;
 using Messages;
 using PersistentStore;
 
@@ -11,6 +12,25 @@ namespace CacheClient;
 public class Aggregator
 {
     private readonly List<ConnectorPool> _pools = [];
+
+    private readonly Dictionary<string, LocalCache.LruLocalCache> _localCaches = new();
+
+    public void ConfigureLocalCache(string collectionName, int capacity)
+    {
+        _localCaches[collectionName] = new LocalCache.LruLocalCache(key =>
+        {
+            // if the item is not in the local cache, we try to get it from the servers
+            var item = InternalQueryRawDataByPrimaryKey(collectionName, key).GetAwaiter().GetResult();
+            if (item.Count == 0)
+                return null; // not found on the server either
+
+            return new LocalCache.CachedItem
+            {
+                PrimaryKey = key,
+                Data = item[0]
+            };
+        }, evictionLimit: capacity, evictionCount: 1000);
+    }
 
     /// <summary>
     /// Creates an aggregator for multiple cache server replicas.
@@ -144,6 +164,27 @@ public class Aggregator
 
     public async Task<List<byte[]>> QueryRawDataByPrimaryKey(string collection, params long[] keys)
     {
+        List<byte[]> result = new List<byte[]>(keys.Length);
+
+        if (_localCaches.TryGetValue(collection, out var cache))
+        {
+            foreach (var key in keys)
+            {
+                var item = cache.TryGet(key);
+                if (item != null)
+                {
+                    result.Add(item.Data);
+                }
+            }
+
+            return result;
+        }
+
+        return await InternalQueryRawDataByPrimaryKey(collection, keys);
+    }
+
+    private async Task<List<byte[]>> InternalQueryRawDataByPrimaryKey(string collection, params long[] keys)
+    {
         
         Connector? connector = null;
         try
@@ -161,7 +202,7 @@ public class Aggregator
             }
             
             // try another server
-            return await QueryRawDataByPrimaryKey(collection, keys);
+            return await InternalQueryRawDataByPrimaryKey(collection, keys);
 
         }
         finally
@@ -347,5 +388,15 @@ public class Aggregator
     private readonly Dictionary<Type, Func<byte[], object>> _deserializers = new();
 
 
+    public Dictionary<string, CacheStatistics> GetStatistics()
+    {
+        var result = new Dictionary<string, CacheStatistics>();
+        foreach (var lruLocalCache in _localCaches)
+        {
+            result[lruLocalCache.Key] = lruLocalCache.Value.GetStatistics();
+        }
 
+
+        return result;
+    }
 }

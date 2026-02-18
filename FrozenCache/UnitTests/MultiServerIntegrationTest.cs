@@ -77,7 +77,9 @@ public class MultiServerIntegrationTest
     }
 
     [Test]
-    public async Task FeedCollectionOnMultipleServers()
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task FeedCollectionOnMultipleServers(bool useLocalCache)
     {
         var servers = _servers.Select(s => ("localhost", s.Port)).ToArray();
 
@@ -90,6 +92,12 @@ public class MultiServerIntegrationTest
             x => MessagePackSerializer.Deserialize<Invoice>(x),
             x => x.Id
         );
+
+
+        if (useLocalCache)
+        {
+            aggregator.ConfigureLocalCache("invoices", 1_000_000);
+        }
 
         var count = 1_000_000;
 
@@ -179,7 +187,16 @@ public class MultiServerIntegrationTest
         Assert.That(invoices3, Is.Not.Null, "Result should not be null");
         Console.WriteLine($"Queried {invoices3.Count} objects after two servers were stopped");
 
-
+        if (useLocalCache)
+        {
+            var stats = aggregator.GetStatistics();
+            foreach (var stat in stats)
+            {
+                Console.WriteLine(stat.Key);
+                Console.WriteLine();
+                Console.WriteLine(stat.Value);
+            }
+        }
 
     }
 }
