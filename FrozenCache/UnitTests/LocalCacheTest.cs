@@ -51,18 +51,21 @@ public class LocalCacheTest
         // add a fourth item, this should trigger eviction of the first one (key=1)
         cache.TryGet(4);
         Assert.That(callsToExternalSource, Is.EqualTo(4));
-        
+
+        // [2, 3, 4] should be in the cache now, and 1 should have been evicted.
+
         // ask for the first item again, it should call the external source again because it was evicted
         var item1 = cache.TryGet(1);
         Assert.That(item1, Is.Not.Null);
         Assert.That(item1!.PrimaryKey, Is.EqualTo(1));
         Assert.That(callsToExternalSource, Is.EqualTo(5));
 
-        // ask for the second item, it should be in the cache
-        // now the cache should have items with keys 3, 4, and 1.
-        var item2 = cache.TryGet(3);
-        Assert.That(item2, Is.Not.Null);
-        Assert.That(item2!.PrimaryKey, Is.EqualTo(3));
+        // [3, 4, 1] should be in the cache now, and 2 should have been evicted.
+
+        // ask for item 3, it should be in the cache
+        var item3 = cache.TryGet(3);
+        Assert.That(item3, Is.Not.Null);
+        Assert.That(item3!.PrimaryKey, Is.EqualTo(3));
         Assert.That(callsToExternalSource, Is.EqualTo(5));
 
         var stats = cache.GetStatistics();

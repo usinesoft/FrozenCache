@@ -3,14 +3,13 @@ using System.Diagnostics;
 namespace CacheClient.LocalCache;
 
 /// <summary>
-/// Local cache based on a less recently used eviction policy. It is thread safe and can be used in a multithreaded environment.
+///     Local cache based on a less recently used eviction policy. It is thread safe and can be used in a multithreaded
+///     environment.
 /// </summary>
 /// <param name="fetchFunc"></param>
 public class LruLocalCache(Func<long, CachedItem?> fetchFunc, int evictionLimit = 1_000_000, int evictionCount = 100)
 {
-    private readonly Dictionary<long, CachedItem> _cache = new();
-
-    private readonly LruEvictionPolicy _evictionPolicy = new(evictionLimit, evictionCount);
+    private readonly LruCachePolicy _evictionPolicy = new(evictionLimit, evictionCount);
 
     private long _foundInLocalCache;
     private long _calls;
@@ -19,38 +18,34 @@ public class LruLocalCache(Func<long, CachedItem?> fetchFunc, int evictionLimit 
 
     private Stopwatch? _watch;
 
+    private readonly object _lock = new();
+
     public CacheStatistics GetStatistics()
     {
-        lock (_cache)
-        {
-            var averageTicks = _callsToExternalCache > 0 ? (double)_totalTicksInExternalCalls / _callsToExternalCache : 0;
-            var averageMilliseconds = averageTicks * 1000D / Stopwatch.Frequency;
-            return new CacheStatistics(_calls, _foundInLocalCache, _callsToExternalCache, averageMilliseconds);
-        }
+        return _statistics;
+        
     }
 
+    // We keep track of the statistics in a field to avoid creating a new object every time GetStatistics is called and to avoid the lock in GetStatistics. 
+    // All data is updated at once to ensure consistency of the statistics. The statistics are updated only in TryGet, which is the only method that modifies the cache state, so we can be sure that the statistics are always up to date.
+    private CacheStatistics _statistics = new CacheStatistics(0, 0, 0, 0);
 
     public CachedItem? TryGet(long key)
     {
-        lock (_cache)
+        lock (_lock)
         {
-            _watch??= Stopwatch.StartNew();
+            _watch ??= Stopwatch.StartNew();
 
             _calls++;
 
-            var fromCache = _cache.GetValueOrDefault(key);
-
+            var fromCache = _evictionPolicy.TryGet(key);
 
             if (fromCache != null)
             {
                 _foundInLocalCache++;
 
-                _evictionPolicy.Touch(fromCache);
 
-                if (fromCache.IsNotFoundMarker)
-                {
-                    return null;
-                }
+                if (fromCache.IsNotFoundMarker) return null;
 
                 return fromCache;
             }
@@ -59,7 +54,7 @@ public class LruLocalCache(Func<long, CachedItem?> fetchFunc, int evictionLimit 
             var before = _watch.ElapsedTicks;
             var fromExternalSource = fetchFunc(key);
             var after = _watch.ElapsedTicks;
-            _totalTicksInExternalCalls += (after - before);
+            _totalTicksInExternalCalls += after - before;
 
             if (fromExternalSource == null)
             {
@@ -69,36 +64,17 @@ public class LruLocalCache(Func<long, CachedItem?> fetchFunc, int evictionLimit 
                     PrimaryKey = key
                 };
 
-                _evictionPolicy.AddItem(notFoundMarker);
+                _evictionPolicy.AddNew(notFoundMarker);
 
-                _cache[key] = notFoundMarker;
 
                 return null;
             }
 
-            _evictionPolicy.AddItem(fromExternalSource);
-            _cache[key] = fromExternalSource;
+            _evictionPolicy.AddNew(fromExternalSource);
 
-            
-            // for now, we apply eviction policy only for real items , not for not found markers. 
-            ApplyEvictionPolicy(); 
+            _statistics = new CacheStatistics(_calls, _foundInLocalCache, _callsToExternalCache, _callsToExternalCache > 0 ? (double)_totalTicksInExternalCalls / _callsToExternalCache * 1000D / Stopwatch.Frequency : 0);
 
-            
             return fromExternalSource;
-        }
-
-
-    }
-
-    private void ApplyEvictionPolicy()
-    {
-        if (_evictionPolicy.IsEvictionRequired)
-        {
-            var toRemove = _evictionPolicy.DoEviction();
-            foreach (var item in toRemove)
-            {
-                _cache.Remove(item.PrimaryKey);
-            }
         }
     }
 }
