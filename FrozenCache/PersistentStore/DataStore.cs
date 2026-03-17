@@ -244,8 +244,14 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
 
     public CollectionsDescription GetCollectionInformation()
     {
-        var description = new CollectionsDescription();
+        var description = new CollectionsDescription()
+        {
+            Collections = new CollectionInformation[_collectionStores.Count]
+        };
+
         
+
+        int index = 0;
         foreach (var store in _collectionStores)
         {
             var collectionName = store.Key;
@@ -260,9 +266,10 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
                 MaxObjectsPerSegment = collectionMetadata.MaxItemsInFile,
                 SegmentFileSize = collectionMetadata.FileSize,
                 SizeInBytes = store.Value.TotalSizeInBytes,
+                Name = collectionName
             };
 
-            description.CollectionInformation[collectionName] = collectionInfo;
+            description.Collections[index++] = collectionInfo;
 
         }
 

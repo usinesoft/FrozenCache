@@ -16,29 +16,22 @@ public class NullDataStore : IDataStore
     {
         return new CollectionsDescription
         {
-            CollectionInformation = new Dictionary<string, CollectionInformation>
-            {
+            Collections = [
+                new CollectionInformation
                 {
-                    "testCollection", new CollectionInformation
-                    {
-                        Count = 1,
-                        SizeInBytes = 121,
-                        LastVersion = "v1",
-                        Keys = ["id"],
-                        SegmentFileSize = 1024 * 1024,
-                        MaxObjectsPerSegment = 1000
-                    }
+                    Count = 1,
+                    SizeInBytes = 121,
+                    LastVersion = "v1",
+                    Keys = ["id"],
+                    SegmentFileSize = 1024 * 1024,
+                    MaxObjectsPerSegment = 1000
                 }
-            }
+            ]
+            
         };
     }
 
 
-
-    public CollectionMetadata[] GetCollections()
-    {
-        return [new CollectionMetadata("testCollection", "id"){LastVersion = null}];
-    }
 
     public void DropCollection(string name)
     {

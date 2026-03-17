@@ -116,14 +116,14 @@ public class MultiServerIntegrationTest
         foreach (var collectionInfo in collectionsByServer)
         {
             Assert.That(collectionInfo, Is.Not.Null);
-            Assert.That(collectionInfo!.CollectionInformation.Count, Is.EqualTo(1), "There should be one collection");
-            var info = collectionInfo.CollectionInformation.Single();
-            Assert.That(info.Key, Is.EqualTo("invoices"), "Collection name should be 'invoices'");
-            Assert.That(info.Value.Count, Is.EqualTo(count), $"Collection should contain {count} objects ");
+            Assert.That(collectionInfo!.Collections.Count, Is.EqualTo(1), "There should be one collection");
+            var info = collectionInfo.Collections.Single();
+            Assert.That(info.Name, Is.EqualTo("invoices"), "Collection name should be 'invoices'");
+            Assert.That(info.Count, Is.EqualTo(count), $"Collection should contain {count} objects ");
             if (lastVersion != null)
-                Assert.That(info.Value.LastVersion, Is.EqualTo(lastVersion), "All servers should have the same version");
+                Assert.That(info.LastVersion, Is.EqualTo(lastVersion), "All servers should have the same version");
             
-            lastVersion ??= info.Value.LastVersion;
+            lastVersion ??= info.LastVersion;
         }
 
 

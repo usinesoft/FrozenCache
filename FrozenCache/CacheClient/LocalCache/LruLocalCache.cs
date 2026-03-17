@@ -15,6 +15,7 @@ public class LruLocalCache(Func<long, CachedItem?> fetchFunc, int evictionLimit 
     private long _calls;
     private long _callsToExternalCache;
     private long _totalTicksInExternalCalls;
+    private long _notFoundInExternalCache;
 
     private Stopwatch? _watch;
 
@@ -28,7 +29,7 @@ public class LruLocalCache(Func<long, CachedItem?> fetchFunc, int evictionLimit 
 
     // We keep track of the statistics in a field to avoid creating a new object every time GetStatistics is called and to avoid the lock in GetStatistics. 
     // All data is updated at once to ensure consistency of the statistics. The statistics are updated only in TryGet, which is the only method that modifies the cache state, so we can be sure that the statistics are always up to date.
-    private CacheStatistics _statistics = new CacheStatistics(0, 0, 0, 0);
+    private CacheStatistics _statistics = new CacheStatistics(0, 0, 0,0, 0);
 
     public CachedItem? TryGet(long key)
     {
@@ -66,13 +67,15 @@ public class LruLocalCache(Func<long, CachedItem?> fetchFunc, int evictionLimit 
 
                 _evictionPolicy.AddNew(notFoundMarker);
 
+                _notFoundInExternalCache++;
+
 
                 return null;
             }
 
             _evictionPolicy.AddNew(fromExternalSource);
 
-            _statistics = new CacheStatistics(_calls, _foundInLocalCache, _callsToExternalCache, _callsToExternalCache > 0 ? (double)_totalTicksInExternalCalls / _callsToExternalCache * 1000D / Stopwatch.Frequency : 0);
+            _statistics = new CacheStatistics(_calls, _foundInLocalCache, _callsToExternalCache, _notFoundInExternalCache, _callsToExternalCache > 0 ? (double)_totalTicksInExternalCalls / _callsToExternalCache * 1000D / Stopwatch.Frequency : 0);
 
             return fromExternalSource;
         }

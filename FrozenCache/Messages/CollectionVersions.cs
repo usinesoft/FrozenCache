@@ -6,7 +6,7 @@ namespace Messages;
 public class CollectionsDescription:IMessage
 {
     [Key(0)]
-    public Dictionary<string, CollectionInformation> CollectionInformation { get; set; } = [];
+    public CollectionInformation[] Collections{ get; set; } = [];
 
     [IgnoreMember]
     public MessageType Type => MessageType.CollectionsDescription;
@@ -35,5 +35,8 @@ public class CollectionInformation
     
     [Key(5)]
     public int MaxObjectsPerSegment { get; set; }
+
+    [Key(6)]
+    public string Name { get; set; }
 
 }
