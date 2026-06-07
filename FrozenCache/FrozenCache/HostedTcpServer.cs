@@ -106,7 +106,8 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
                 if (message == null)
                 {
-                    Logger.LogWarning("Client disconnected");
+                    Logger.LogInformation("Client disconnected");
+                    client.Close();
                     break; // Client disconnected 
                 }
 
@@ -236,15 +237,17 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
             if (IsNullOrWhiteSpace(createRequest.PrimaryKeyName))
                 throw new CacheException("Primary key name is mandatory in CreateCollection request");
 
-            Logger.LogInformation(
-                "Creating collection {Collection} with primary key {PrimaryKey} and indexes {Indexes}",
-                createRequest.CollectionName, createRequest.PrimaryKeyName, createRequest.OtherIndexes);
 
             var metadata = new CollectionMetadata(createRequest.CollectionName, createRequest.PrimaryKeyName,
                 createRequest.OtherIndexes);
 
 
-            Store.CreateCollection(metadata);
+            var newCollection = Store.CreateCollection(metadata);
+
+            if (!newCollection)
+                Logger.LogInformation(
+                    "Creating collection {Collection} with primary key {PrimaryKey} and indexes {Indexes}",
+                    createRequest.CollectionName, createRequest.PrimaryKeyName, createRequest.OtherIndexes);
 
             await stream.WriteMessageAsync(new StatusResponse(), ct);
         }
@@ -272,8 +275,6 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
     private async Task ProcessFeedSession(BeginFeedRequest beginRequest, Stream stream)
     {
-        
-
         try
         {
             if (IsNullOrWhiteSpace(beginRequest.CollectionName))

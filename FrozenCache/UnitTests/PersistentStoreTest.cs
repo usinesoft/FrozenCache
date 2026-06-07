@@ -112,7 +112,7 @@ public class PersistentStoreTest
         Assert.That(collections.Collections.Count, Is.EqualTo(1),
             "Store should have one collection after feeding first version");
 
-        var collection = collections.Collections.First();
+        var collection = collections.Collections[0];
         Assert.That(collection.Name, Is.EqualTo("persons"), "Collection name should match the one created");
         Assert.That(collection.LastVersion, Is.EqualTo("001"), "Last version should be '001' after first feed");
     }
@@ -148,7 +148,7 @@ public class PersistentStoreTest
             Assert.That(collections.Collections.Count, Is.EqualTo(1),
                 "Store should have one collection after feeding first version");
 
-            var collection = collections.Collections.First();
+            var collection = collections.Collections[0];
             Assert.That(collection.Name, Is.EqualTo("persons"), "Collection name should match the one created");
             Assert.That(collection.LastVersion, Is.EqualTo("v001"), "Last version should be 'v001' after first feed");
         }
@@ -161,7 +161,7 @@ public class PersistentStoreTest
             var collections = store.GetCollectionInformation();
             Assert.That(collections.Collections.Count, Is.EqualTo(1),
                 "Store should have one collection after reopening");
-            var collection = collections.Collections.First();
+            var collection = collections.Collections[0];
 
             Assert.That(collection.Name, Is.EqualTo("persons"), "Collection name should match the one created");
             Assert.That(collection.LastVersion, Is.EqualTo("v001"), "Last version should be '001' after first feed");

@@ -31,13 +31,17 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
 
     public string RootPath { get; }
 
-    public void CreateCollection(CollectionMetadata metadata, int maxVersionToKeep = 2)
+
+    public static readonly string MetadataFileName = "metadata.json";
+
+    public bool CreateCollection(CollectionMetadata metadata, int maxVersionToKeep = 2)
     {
         var path = Path.Combine(RootPath, metadata.Name);
 
         if (Directory.Exists(path))
         {
-            var jsonMetadata = File.ReadAllText(Path.Combine(path, "metadata.json"));
+            var jsonMetadata = File.ReadAllText(Path.Combine(path, MetadataFileName));
+
 
             var currentMetadata = JsonSerializer.Deserialize<CollectionMetadata>(jsonMetadata, AppJsonSerializerContext.Default.CollectionMetadata) ??
                                   throw new CacheException("Failed to deserialize existing collection metadata");
@@ -48,16 +52,16 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
             }
 
             // if the collection already exists, and it is compatible we ignore the request
-        }
-        else
-        {
-            Directory.CreateDirectory(path);
-            //metadata is stored as json in the collection root path
-            var json = JsonSerializer.Serialize(metadata, AppJsonSerializerContext.Default.CollectionMetadata);
-            File.WriteAllText(Path.Combine(path, "metadata.json"), json);
+            return false;
         }
 
+        Directory.CreateDirectory(path);
+        //metadata is stored as json in the collection root path
+        var json = JsonSerializer.Serialize(metadata, AppJsonSerializerContext.Default.CollectionMetadata);
+        File.WriteAllText(Path.Combine(path, MetadataFileName), json);
+
         LoadCollectionsMetadata();
+        return true;
         
     }
 
@@ -72,7 +76,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         for (var i = 0; i < collectionDirs.Count; i++)
         {
             var dir = collectionDirs[i];
-            var metadataPath = Path.Combine(dir, "metadata.json");
+            var metadataPath = Path.Combine(dir, MetadataFileName);
             if (!File.Exists(metadataPath)) throw new CacheException($"Metadata file not found in {dir}");
             var json = File.ReadAllText(metadataPath);
             collections[i] = JsonSerializer.Deserialize<CollectionMetadata>(json, AppJsonSerializerContext.Default.CollectionMetadata) ??
@@ -81,7 +85,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
             // get available versions
             var versions = Directory.EnumerateDirectories(dir)
                 .Select(Path.GetFileName)
-                .Where(name => name != "metadata.json")
+                .Where(name => name != MetadataFileName)
                 .OrderBy(x => x)
                 .ToList();
 
@@ -127,7 +131,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
 
         Directory.EnumerateDirectories(RootPath).ToList().ForEach(dir =>
         {
-            var metadataPath = Path.Combine(dir, "metadata.json");
+            var metadataPath = Path.Combine(dir, MetadataFileName);
             
             if (!File.Exists(metadataPath)) throw new CacheException($"Metadata file not found in {dir}");
             
@@ -177,7 +181,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         if (!Directory.Exists(path))
             throw new CacheException($"Collection {collectionName} not found. Call CreateCollection()");
 
-        var metadataPath = Path.Combine(path, "metadata.json");
+        var metadataPath = Path.Combine(path, MetadataFileName);
         if (!File.Exists(metadataPath)) throw new CacheException($"Metadata file not found in {path}");
 
         var json = File.ReadAllText(metadataPath);

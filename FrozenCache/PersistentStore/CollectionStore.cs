@@ -1,5 +1,4 @@
 ﻿using System.IO.MemoryMappedFiles;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 
@@ -46,21 +45,12 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     private int _firstFreeOffset;
 
     public long TotalSizeInBytes { get; private set; }
-    public int ObjectCount { get; private set; }
-    public int NonUniqueKeys { get; private set; }
+    public int ObjectCount => _primaryIndex.ObjectCount;
+    
+    public int NonUniqueKeys => _primaryIndex.NonUniqueKeys;
 
-
-    /// <summary>
-    ///     This is an index used to store documents by most discriminant key.
-    ///     The key is unique most of the time but not always. To reduce memory usage, we store two different collections for
-    ///     duplicate and unique values.
-    /// </summary>
-    private readonly Dictionary<long, IndexEntry[]> _byMostDiscriminantKey = new();
-
-    /// <summary>
-    ///     For unique keys, we store a single entry per key.
-    /// </summary>
-    private readonly Dictionary<long, IndexEntry> _byMostDiscriminantKeyUnique = new();
+    //private readonly IIndex _primaryIndex = new DictionaryIndex();
+    private readonly IIndex _primaryIndex = new OrderedIndex();
 
     private readonly ILogger? _logger;
 
@@ -119,7 +109,7 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     }
 
 
-    public string StoragePath { get; }
+    private string StoragePath { get; }
 
     #region Implementation of IDisposable
 
@@ -282,7 +272,6 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     }
 
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void IndexHeader(int fileIndex, PersistentObjectHeader header)
     {
         // For now duplicated keys will be found both in the unique and non-unique collections
@@ -290,51 +279,15 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 
         var key = header.IndexKeys[0];
 
-        // if the key is not unique copy the entry in the dictionary for duplicates
-        if (_byMostDiscriminantKeyUnique.TryGetValue(key, out var entry))
+        var newEntry = new IndexEntry
         {
-            // if already a duplicate, add to the existing entries
-            if (_byMostDiscriminantKey.TryGetValue(key, out var entries))
-            {
-                // add the header to the existing entries
-                var newEntries = new IndexEntry[entries.Length + 1];
-                Array.Copy(entries, newEntries, entries.Length);
-                newEntries[^1] = new IndexEntry
-                {
-                    OtherKeys = header.IndexKeys[1..],
-                    FileIndex = fileIndex,
-                    OffsetInFile = header.OffsetInFile,
-                    Length = header.Length
-                };
-                _byMostDiscriminantKey[key] = newEntries;
-            }
-            else
-            {
-                // create a new entry for the duplicate key
-                _byMostDiscriminantKey[key] =
-                [
-                    entry,
-                    new IndexEntry
-                    {
-                        OtherKeys = header.IndexKeys[1..],
-                        FileIndex = fileIndex,
-                        OffsetInFile = header.OffsetInFile,
-                        Length = header.Length
-                    }
-                ];
-            }
-        }
-        else
-        {
-            _byMostDiscriminantKeyUnique[header.IndexKeys[0]] =
-                new IndexEntry
-                {
-                    OtherKeys = header.IndexKeys[1..],
-                    FileIndex = fileIndex,
-                    OffsetInFile = header.OffsetInFile,
-                    Length = header.Length
-                };
-        }
+            OtherKeys = header.IndexKeys[1..],
+            FileIndex = fileIndex,
+            OffsetInFile = header.OffsetInFile,
+            Length = header.Length
+        };
+
+        _primaryIndex.Add(key, newEntry);
     }
 
 
@@ -357,24 +310,14 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 
     // After the last document is written call this method to trigger index creation
 
-    public void CreateIndexes()
+    private void CreateIndexes()
     {
         _logger?.LogInformation("Post-processing index..");
 
-        if (_byMostDiscriminantKey is { Count: > 0 }) // duplicate keys exist
-            // remove duplicate keys from the unique collection
-            foreach (var key in _byMostDiscriminantKey.Keys)
-                _byMostDiscriminantKeyUnique.Remove(key);
-
-        var duplicatedValues = _byMostDiscriminantKey.Values.Sum(x => x.Length);
-        var uniqueValues = _byMostDiscriminantKeyUnique.Count;
-
-        NonUniqueKeys = duplicatedValues;
-        ObjectCount = duplicatedValues + uniqueValues;
+        _primaryIndex.PostProcess();
 
 
         _logger?.LogInformation("Done post-processing index");
-
     }
 
     public void EndOfFeed()
@@ -386,19 +329,12 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     {
         List<Item> result = new();
 
+        var entries = _primaryIndex.Get(keyValue);
 
-        // first search in the unique key collection
-        if (_byMostDiscriminantKeyUnique.TryGetValue(keyValue, out var value))
+        foreach (var indexEntry in entries)
         {
-            result.Add(LoadDocument(keyValue, value));
-            return result;
-        }
-
-        // if not found, search in the duplicate key collection
-        if (_byMostDiscriminantKey.TryGetValue(keyValue, out var values))
-        {
-            foreach (var entry in values) result.Add(LoadDocument(keyValue, entry));
-            return result;
+            var value = LoadDocument(keyValue, indexEntry);
+            result.Add(value);
         }
 
 
@@ -410,24 +346,24 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 ///     The value in the index by most discriminant key.
 /// </summary>
 //[StructLayout(LayoutKind.Sequential, Pack = 4)]
-internal class IndexEntry
+public class IndexEntry
 {
     /// <summary>
     ///     Rest of the keys that can be used to retrieve the object.
     /// </summary>
-    public long[] OtherKeys { get; set; } = [];
+    public long[] OtherKeys { get; init; } = [];
 
     /// <summary>
     ///     The file containing the object
     /// </summary>
-    public int FileIndex { get; set; }
+    public int FileIndex { get; init; }
 
     /// <summary>
     /// </summary>
-    public int OffsetInFile { get; set; }
+    public int OffsetInFile { get; init; }
 
     /// <summary>
     ///     Length of the object in bytes.
     /// </summary>
-    public int Length { get; set; }
+    public int Length { get; init; }
 }

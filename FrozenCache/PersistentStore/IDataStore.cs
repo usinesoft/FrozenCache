@@ -16,7 +16,8 @@ public interface IDataStore
     /// </summary>
     /// <param name="metadata"></param>
     /// <param name="maxVersionToKeep">maximum number of versions to keep for this collection. Should be greater than 1</param>
-    public void CreateCollection(CollectionMetadata metadata, int maxVersionToKeep = 2);
+    /// <returns>true if the collection was created successfully, false if it already exists and is compatible</returns>
+    public bool CreateCollection(CollectionMetadata metadata, int maxVersionToKeep = 2);
 
     /// <summary>
     /// Retrieves all available collections in the data store.

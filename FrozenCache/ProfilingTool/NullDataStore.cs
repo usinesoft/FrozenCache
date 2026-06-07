@@ -7,9 +7,9 @@ namespace ProfilingTool;
 
 public class NullDataStore : IDataStore
 {
-    public void CreateCollection(CollectionMetadata metadata, int maxVersionToKeep = 2)
+    public bool CreateCollection(CollectionMetadata metadata, int maxVersionToKeep = 2)
     {
-
+        return true;
     }
 
     public CollectionsDescription GetCollectionInformation()
