@@ -26,3 +26,9 @@ internal interface IIndex
     int NonUniqueKeys { get; }
 
 }
+
+public enum IndexType
+{
+    Dictionary,
+    Ordered
+}

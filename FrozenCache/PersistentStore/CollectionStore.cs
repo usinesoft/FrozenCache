@@ -49,8 +49,7 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     
     public int NonUniqueKeys => _primaryIndex.NonUniqueKeys;
 
-    //private readonly IIndex _primaryIndex = new DictionaryIndex();
-    private readonly IIndex _primaryIndex = new OrderedIndex();
+    private readonly IIndex _primaryIndex;
 
     private readonly ILogger? _logger;
 
@@ -65,7 +64,7 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     /// <param name="maxDocumentsInEachFile"></param>
     public CollectionStore(string storagePath, int numberOfKeys, ILogger? logger,
         int binaryFileDataSize = Consts.DefaultBinaryFileDataSize,
-        int maxDocumentsInEachFile = Consts.DefaultMaxDocumentsInOneFile)
+        int maxDocumentsInEachFile = Consts.DefaultMaxDocumentsInOneFile, IndexType primaryIndexType = IndexType.Dictionary)
     {
         _logger = logger;
 
@@ -101,6 +100,12 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
             Directory.CreateDirectory(StoragePath);
         }
 
+        _primaryIndex = primaryIndexType switch
+        {
+            IndexType.Dictionary => new DictionaryIndex(),
+            IndexType.Ordered => new OrderedIndex(),
+            _ => throw new ArgumentOutOfRangeException(nameof(primaryIndexType), primaryIndexType, null)
+        };
 
         if (_views.Count == 0)
             CreateNewFile(1);

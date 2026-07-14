@@ -247,8 +247,8 @@ public class Aggregator
         if (serializer == null) throw new ArgumentNullException(nameof(serializer));
         if (deserializer == null) throw new ArgumentNullException(nameof(deserializer));
 
-        if (_pools.Any(x => !x.IsConnected))
-            throw new CacheException("Can not register a typed collection if all the servers are not available");
+        if (!_pools.Any(x => x.IsConnected))
+            throw new CacheException("No server is available");
 
         if (keyGenerators.Length == 0)
             throw new CacheException("At least one key generator must be specified");

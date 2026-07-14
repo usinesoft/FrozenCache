@@ -7,6 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="MessagePack" Version="3.1.7" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Messages\Messages.csproj" />
     <ProjectReference Include="..\PersistentStore\PersistentStore.csproj" />
   </ItemGroup>
