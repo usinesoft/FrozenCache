@@ -115,13 +115,9 @@ namespace PerTest
 
             try
             {
-                if (string.IsNullOrWhiteSpace(version))
-                {
-                    await connector.DropCollection("big");
+                await connector.CreateCollection("big", "id", "name");
 
-                    await connector.CreateCollection("big", "id", "name");
-                }
-
+                
                 version ??= "v1";
 
 

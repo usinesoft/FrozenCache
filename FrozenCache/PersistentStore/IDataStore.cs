@@ -12,12 +12,12 @@ namespace PersistentStore;
 public interface IDataStore
 {
     /// <summary>
-    /// Creates a new collection with the specified schema.
+    /// Creates a new collection with the specified schema. The number of versions retained for this collection
+    /// is controlled by <see cref="CollectionMetadata.MaxVersionsToKeep"/> on <paramref name="metadata"/>.
     /// </summary>
     /// <param name="metadata"></param>
-    /// <param name="maxVersionToKeep">maximum number of versions to keep for this collection. Should be greater than 1</param>
     /// <returns>true if the collection was created successfully, false if it already exists and is compatible</returns>
-    public bool CreateCollection(CollectionMetadata metadata, int maxVersionToKeep = 2);
+    public bool CreateCollection(CollectionMetadata metadata);
 
     /// <summary>
     /// Retrieves all available collections in the data store.

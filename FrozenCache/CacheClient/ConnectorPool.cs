@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using System.Threading.Channels;
+using Messages;
 
 namespace CacheClient;
 
@@ -16,6 +17,18 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
     public string Address { get; }
 
     public bool IsConnected { get; private set; }
+
+    /// <summary>
+    /// Raised by the watchdog when a collection's last version differs from the one observed on the previous
+    /// check against this server.
+    /// </summary>
+    public event EventHandler<NewVersionEventArgs>? NewVersion;
+
+    /// <summary>
+    /// Last version seen for each collection, by collection name. Only ever touched by the watchdog task,
+    /// which runs one iteration at a time, so no locking is needed.
+    /// </summary>
+    private readonly Dictionary<string, string> _lastKnownVersions = new();
 
     private readonly string _server;
     private readonly int _port;
@@ -87,19 +100,24 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
                     {
                         Debug.Print("watchdog : is connected check with pooled connector");
 
+                        Connector? testConnector = null;
                         try
                         {
-                            var testConnector = await Get();
-                            if (await testConnector.Ping())
-                            {
-                                Debug.Print("watchdog : still connected");
-                                serverUp = true;
-                                Return(testConnector);
-                            }
+                            testConnector = await Get();
+                            await CheckCollectionVersions(testConnector);
+                            Debug.Print("watchdog : still connected");
+                            serverUp = true;
                         }
                         catch (Exception)
                         {
                             Debug.Print("watchdog : exception while checking connection");
+                        }
+                        finally
+                        {
+                            // always return the connector, whether the version check succeeded or not -
+                            // otherwise a failed check silently drains the pool by one connector each time
+                            if (testConnector != null)
+                                Return(testConnector);
                         }
                     }
                     else
@@ -113,9 +131,18 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
 
                             if (connector.Connect())
                             {
-                                Debug.Print("watchdog : connected, waiting for ping response");
-                                serverUp = await connector.Ping();
-                                Debug.Print($"watchdog : server is up again:ping answer is {serverUp}");
+                                Debug.Print("watchdog : connected, checking collection versions");
+                                try
+                                {
+                                    await CheckCollectionVersions(connector);
+                                    serverUp = true;
+                                }
+                                catch (Exception)
+                                {
+                                    Debug.Print("watchdog : exception while checking collection versions on reconnect");
+                                }
+
+                                Debug.Print($"watchdog : server is up again:{serverUp}");
                             }
                             else
                             {
@@ -168,6 +195,32 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
                 Debug.Print("watchdog exception");
             }
         }, tk);
+    }
+
+    /// <summary>
+    /// Fetches the current collections description from the server and raises <see cref="NewVersion"/> for
+    /// every collection whose last version differs from the one observed on the previous check. A collection
+    /// seen for the first time only establishes the baseline - it does not raise an event.
+    /// </summary>
+    private async Task CheckCollectionVersions(Connector connector)
+    {
+        var description = await connector.GetCollectionsDescription();
+
+        foreach (var collection in description.Collections)
+        {
+            if (_lastKnownVersions.TryGetValue(collection.Name, out var previousVersion))
+            {
+                if (previousVersion == collection.LastVersion)
+                    continue;
+
+                _lastKnownVersions[collection.Name] = collection.LastVersion;
+                NewVersion?.Invoke(this, new NewVersionEventArgs(collection.Name, collection.LastVersion));
+            }
+            else
+            {
+                _lastKnownVersions[collection.Name] = collection.LastVersion;
+            }
+        }
     }
 
     private void InternalConnect()

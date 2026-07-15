@@ -24,7 +24,18 @@ public class LruLocalCache(Func<long, CachedItem?> fetchFunc, int evictionLimit 
     public CacheStatistics GetStatistics()
     {
         return _statistics;
-        
+
+    }
+
+    /// <summary>
+    ///     Discards all cached entries, e.g. because the collection they belong to was fed a new version.
+    /// </summary>
+    public void Clear()
+    {
+        lock (_lock)
+        {
+            _evictionPolicy.Clear();
+        }
     }
 
     // We keep track of the statistics in a field to avoid creating a new object every time GetStatistics is called and to avoid the lock in GetStatistics. 

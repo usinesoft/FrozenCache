@@ -93,9 +93,7 @@ internal static class Program
 
 }
 
-public record Todo(int Id, string? Title, DateOnly? DueBy = null, bool IsComplete = false);
 
-[JsonSerializable(typeof(Todo[]))]
 [JsonSerializable(typeof(CollectionsDescription))]
 [JsonSerializable(typeof(CollectionInformation))]
 internal partial class AppJsonSerializerContext : JsonSerializerContext

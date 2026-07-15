@@ -36,7 +36,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
 
     private static readonly string MetadataFileName = "metadata.json";
 
-    public bool CreateCollection(CollectionMetadata metadata, int maxVersionToKeep = 2)
+    public bool CreateCollection(CollectionMetadata metadata)
     {
         var path = Path.Combine(RootPath, metadata.Name);
 

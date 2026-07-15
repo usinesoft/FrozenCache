@@ -7,7 +7,7 @@ namespace UnitTests;
 
 public class NullDataStore : IDataStore
 {
-    public bool CreateCollection(CollectionMetadata metadata, int maxVersionToKeep = 2)
+    public bool CreateCollection(CollectionMetadata metadata)
     {
         return true;
     }

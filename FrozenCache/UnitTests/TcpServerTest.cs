@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics;
 using CacheClient;
 using FrozenCache;
+using Messages;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -39,7 +40,7 @@ public class TcpServerTest
         client.Connect();
         await client.CreateCollection("testCollection", "id", "name", "age");
 
-        dataStore.Verify(x => x.CreateCollection(It.IsAny<CollectionMetadata>(), It.IsAny<int>()), Times.Once);
+        dataStore.Verify(x => x.CreateCollection(It.IsAny<CollectionMetadata>()), Times.Once);
 
         // perf test
         Stopwatch stopwatch = Stopwatch.StartNew();
@@ -116,6 +117,9 @@ public class TcpServerTest
         var logger = new Mock<ILogger<HostedTcpServer>>();
 
         var dataStore = new Mock<IDataStore>();
+        // the watchdog now calls GetCollectionsDescription() instead of Ping(), so this needs a valid response
+        dataStore.Setup(x => x.GetCollectionInformation()).Returns(new CollectionsDescription());
+
         var server = await StartServer(dataStore.Object, logger.Object).ConfigureAwait(false);
 
         Debug.Print($"server1 is up on port {server.Port}");

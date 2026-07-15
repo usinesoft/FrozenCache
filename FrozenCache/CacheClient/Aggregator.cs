@@ -15,6 +15,20 @@ public class Aggregator
 
     private readonly Dictionary<string, LruLocalCache> _localCaches = new();
 
+    /// <summary>
+    /// Raised whenever any replica reports that a collection's last version has changed. The corresponding
+    /// local cache (if any) has already been cleared by the time this fires.
+    /// </summary>
+    public event EventHandler<NewVersionEventArgs>? NewVersion;
+
+    private void OnPoolNewVersion(object? sender, NewVersionEventArgs e)
+    {
+        if (_localCaches.TryGetValue(e.CollectionName, out var cache))
+            cache.Clear();
+
+        NewVersion?.Invoke(this, e);
+    }
+
     public void ConfigureLocalCache(string collectionName, int capacity)
     {
         _localCaches[collectionName] = new LruLocalCache(key =>
@@ -38,7 +52,7 @@ public class Aggregator
     /// <param name="capacity">Maximum capacity of each pool.</param>
     /// <param name="servers">List of server addresses and ports.</param>
     public Aggregator(int capacity, params (string server, int port)[] servers)
-        : this(capacity, false, true, servers)
+        : this(capacity, false, true, 10_000, servers)
     {
     }
 
@@ -51,14 +65,21 @@ public class Aggregator
     /// When true (the default), each server certificate must be trusted and match its host. Set to false only
     /// for testing against a self-signed/untrusted certificate.
     /// </param>
+    /// <param name="watchDogFrequencyInMilliseconds">
+    /// How often each replica's watchdog checks connectivity and collection versions.
+    /// </param>
     /// <param name="servers">List of server addresses and ports.</param>
-    public Aggregator(int capacity, bool useSsl, bool validateServerCertificate, params (string server, int port)[] servers)
+    public Aggregator(int capacity, bool useSsl, bool validateServerCertificate,
+        int watchDogFrequencyInMilliseconds = 10_000, params (string server, int port)[] servers)
     {
         if (servers == null || servers.Length == 0) throw new ArgumentNullException(nameof(servers), "At least one server must be specified");
 
         foreach (var (server, port) in servers)
         {
-            _pools.Add(new ConnectorPool(capacity, server, port, useSsl: useSsl, validateServerCertificate: validateServerCertificate));
+            var pool = new ConnectorPool(capacity, server, port, watchDogFrequencyInMilliseconds,
+                useSsl, validateServerCertificate);
+            pool.NewVersion += OnPoolNewVersion;
+            _pools.Add(pool);
         }
     }
 
