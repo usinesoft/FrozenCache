@@ -1,4 +1,6 @@
 ﻿using System.Diagnostics;
+using System.Net.Sockets;
+using System.Text;
 using CacheClient;
 using FrozenCache;
 using MessagePack;
@@ -45,7 +47,7 @@ namespace UnitTests;
     {
         DataStore.Drop(StoreName);
 
-        _store = new DataStore(StoreName);
+        _store = new DataStore(StoreName, IndexType.Dictionary);
 
         _store.Open();
 
@@ -192,6 +194,115 @@ namespace UnitTests;
 
         watch.Stop();
         Console.WriteLine($"retrieving 10 objects 100 times took {watch.ElapsedMilliseconds} milliseconds");
+    }
+
+    /// <summary>
+    /// Reproduces the production incident: a client disconnects mid-feed. The partially-written version
+    /// must be aborted and cleaned up immediately (not left behind to be picked up as valid data), and the
+    /// previously fed, complete version must remain queryable throughout.
+    /// </summary>
+    [Test]
+    public async Task ClientDisconnectingMidFeedAbortsThePartialVersion()
+    {
+        var connector = new Connector("localhost", _server!.Port);
+        connector.Connect();
+
+        await connector.CreateCollection("persons", "id");
+
+        // a first, fully completed version
+        await connector.FeedCollection("persons", "v001", new[] { new Item(new byte[10], 1) });
+
+        var crashedVersionPath = Path.Combine(StoreName, "persons", "v002");
+
+        // start a second feed and disconnect mid-stream, without ever sending the end-of-batch marker
+        // or reading the final response, simulating a client process crashing during a feed session
+        using (var client = new TcpClient())
+        {
+            client.Connect("localhost", _server.Port);
+            var stream = client.GetStream();
+
+            await stream.WriteMessageAsync(new BeginFeedRequest("persons", "v002"), CancellationToken.None);
+
+            var ack = await stream.ReadMessageAsync(CancellationToken.None);
+            Assert.That((ack as StatusResponse)?.Success, Is.True, "Server should acknowledge the feed request");
+
+            var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+            var batchSerializer = new FeedItemBatchSerializer();
+
+            var batch = new[] { new FeedItem { Data = new byte[10], Keys = [2] } };
+            batchSerializer.Serialize(writer, batch);
+
+            // connection is closed here (client crash) without completing the protocol
+        }
+
+        // give the server a moment to detect the disconnect and abort the feed
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (DateTime.UtcNow < deadline && Directory.Exists(crashedVersionPath))
+            await Task.Delay(100);
+
+        Assert.That(Directory.Exists(crashedVersionPath), Is.False,
+            "The partially-fed version should have been aborted and removed after the client disconnected");
+
+        // the previously completed version must still be queryable
+        var result = await connector.QueryByPrimaryKey("persons", 1);
+        Assert.That(result.Count, Is.EqualTo(1), "Data from the completed version should still be queryable");
+
+        // feeding the same version again afterward must succeed: no leftover directory should block it
+        await connector.FeedCollection("persons", "v002", new[] { new Item(new byte[20], 2) });
+        var result2 = await connector.QueryByPrimaryKey("persons", 2);
+        Assert.That(result2.Count, Is.EqualTo(1), "The retried feed of the same version should succeed");
+    }
+
+    /// <summary>
+    /// A graceful disconnect (the client shuts down its send side, or the process exits cleanly) makes
+    /// Stream.Read return 0 rather than throw. If that happens mid-way through the body of a batch that
+    /// was announced with a larger declared size, the read loop must not spin forever waiting for bytes
+    /// that will never arrive - it must fail like any other disconnect.
+    /// </summary>
+    [Test]
+    public async Task ClientGracefullyDisconnectingMidBatchBodyAbortsThePartialVersion()
+    {
+        var connector = new Connector("localhost", _server!.Port);
+        connector.Connect();
+
+        await connector.CreateCollection("persons", "id");
+
+        await connector.FeedCollection("persons", "v001", new[] { new Item(new byte[10], 1) });
+
+        var crashedVersionPath = Path.Combine(StoreName, "persons", "v003");
+
+        using (var client = new TcpClient())
+        {
+            client.Connect("localhost", _server.Port);
+            var stream = client.GetStream();
+
+            await stream.WriteMessageAsync(new BeginFeedRequest("persons", "v003"), CancellationToken.None);
+
+            var ack = await stream.ReadMessageAsync(CancellationToken.None);
+            Assert.That((ack as StatusResponse)?.Success, Is.True, "Server should acknowledge the feed request");
+
+            var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+
+            // announce a batch bigger than what will actually be sent, then stop mid-body
+            writer.Write(1000); // declared body size in bytes
+            writer.Write(1); // declared item count
+            writer.Write(new byte[100]); // only part of the announced 1000 bytes
+            writer.Flush();
+
+            // half-close the send side: the server sees a graceful end-of-stream (Read returns 0)
+            // instead of an exception, in the middle of reading the declared batch body
+            client.Client.Shutdown(SocketShutdown.Send);
+        }
+
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (DateTime.UtcNow < deadline && Directory.Exists(crashedVersionPath))
+            await Task.Delay(100);
+
+        Assert.That(Directory.Exists(crashedVersionPath), Is.False,
+            "The partially-fed version should have been aborted after the client disconnected mid-batch-body");
+
+        var result = await connector.QueryByPrimaryKey("persons", 1);
+        Assert.That(result.Count, Is.EqualTo(1), "Data from the completed version should still be queryable");
     }
 
 }

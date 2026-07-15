@@ -17,10 +17,10 @@ namespace FrozenCache;
 public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, IOptions<ServerSettings> configuration)
     : IHostedService
 {
-    public IDataStore Store { get; } = store;
+    private IDataStore Store { get; } = store;
 
-    public ILogger Logger { get; } = logger;
-    public IOptions<ServerSettings> Configuration { get; } = configuration;
+    private ILogger Logger { get; } = logger;
+    private IOptions<ServerSettings> Configuration { get; } = configuration;
 
     private readonly CancellationTokenSource _cts = new();
 
@@ -275,6 +275,8 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
     private async Task ProcessFeedSession(BeginFeedRequest beginRequest, Stream stream)
     {
+        Task? feederTask = null;
+
         try
         {
             if (IsNullOrWhiteSpace(beginRequest.CollectionName))
@@ -306,13 +308,24 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
             var internalChannel = Channel.CreateBounded<FeedItem>(1_000_000);
 
-            var feederTask = StartCollectionFeeder(beginRequest.CollectionName, beginRequest.CollectionVersion,
+            feederTask = StartCollectionFeeder(beginRequest.CollectionName, beginRequest.CollectionVersion,
                 internalChannel);
 
-            foreach (var item in ReadItems(stream))
-                await internalChannel.Writer.WriteAsync(item, CancellationToken.None);
+            try
+            {
+                foreach (var item in ReadItems(stream))
+                    await internalChannel.Writer.WriteAsync(item, CancellationToken.None);
 
-            internalChannel.Writer.Complete();
+                internalChannel.Writer.Complete();
+            }
+            catch (Exception readEx)
+            {
+                // The client disconnected or the stream is otherwise broken mid-feed. Fault the channel so
+                // the feeder task stops waiting for more items instead of hanging forever, and aborts
+                // (deletes) the partially-written version instead of leaving it behind.
+                internalChannel.Writer.Complete(readEx);
+                throw;
+            }
 
             await feederTask;
 
@@ -324,6 +337,19 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         {
             Logger.LogError("Error while processing feed session for collection {Collection} {Version}: {Message}",
                 beginRequest.CollectionName, beginRequest.CollectionVersion, e.Message);
+
+            if (feederTask != null)
+                try
+                {
+                    // wait for the feeder to finish aborting so the partial version is cleaned up
+                    // before this session ends; the feeder already logs its own failure.
+                    await feederTask;
+                }
+                catch
+                {
+                    // ignored, already logged by the feeder task
+                }
+
             await stream.WriteMessageAsync(new StatusResponse { ErrorMessage = e.Message, Success = false },
                 CancellationToken.None);
         }

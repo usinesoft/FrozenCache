@@ -61,42 +61,49 @@ public class FeedItemBatchSerializer : IBatchSerializer<FeedItem>
     }
     public ICollection<FeedItem> Deserialize(BinaryReader reader)
     {
-        
         int size = reader.ReadInt32();
 
-        byte[] buffer = ArrayPool<byte>.Shared.Rent(2 * size);
-
-        
         var count = reader.ReadInt32();
 
         if (size == 0 && count == 0)// end of stream
             return Array.Empty<FeedItem>();
 
-        var remainingBytes = size;
-        var offset = 0;
-        while (remainingBytes > 0)
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(2 * size);
+
+        try
         {
-            var bytes = reader.Read(buffer, offset, remainingBytes);
-            remainingBytes -= bytes;
-            offset += bytes;
+            var remainingBytes = size;
+            var offset = 0;
+            while (remainingBytes > 0)
+            {
+                var bytes = reader.Read(buffer, offset, remainingBytes);
+
+                // Stream.Read returns 0 on a graceful disconnect instead of throwing; without this check
+                // a client that disconnects mid-batch would spin this loop forever instead of surfacing
+                // as a failure the caller can react to.
+                if (bytes == 0)
+                    throw new EndOfStreamException("Client disconnected while reading a feed batch.");
+
+                remainingBytes -= bytes;
+                offset += bytes;
+            }
+
+            var memoryStream = new MemoryStream(buffer);
+
+            var result = new List<FeedItem>(count);
+
+            var memoryReader = new BinaryReader(memoryStream, Encoding.UTF8, true);
+            for (int i = 0; i < count; i++)
+            {
+                var item = _serializer.Deserialize(memoryReader);
+                result.Add(item);
+            }
+
+            return result;
         }
-
-
-
-        MemoryStream memoryStream = new MemoryStream(buffer);
-
-        List<FeedItem> result = new List<FeedItem>(count);
-
-        var memoryReader = new BinaryReader(memoryStream, Encoding.UTF8, true);
-        for (int i = 0; i < count; i++)
+        finally
         {
-            var item = _serializer.Deserialize(memoryReader);
-            result.Add(item);
+            ArrayPool<byte>.Shared.Return(buffer);
         }
-
-        ArrayPool<byte>.Shared.Return(buffer);
-
-
-        return result;
     }
 }

@@ -52,7 +52,7 @@ public class MultiServerIntegrationTest
         for (var i = 0; i < ServerCount; i++)
         {
             // create stores
-            var store = new DataStore($"{StoreName}{i + 1}");
+            var store = new DataStore($"{StoreName}{i + 1}", IndexType.Dictionary);
 
             store.Open();
 

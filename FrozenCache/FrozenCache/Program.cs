@@ -2,7 +2,6 @@ using System.Text.Json.Serialization;
 using Messages;
 using PersistentStore;
 using Serilog;
-using Microsoft.Extensions.Hosting.WindowsServices;
 
 namespace FrozenCache;
 
@@ -12,7 +11,7 @@ internal static class Program
     {
 
         
-        // when run in windows service mode, by default the working directory is C:\Windows\System32
+        // when run in Windows service mode, by default the working directory is C:\Windows\System32
         var currentDirectory = AppContext.BaseDirectory;
         Directory.SetCurrentDirectory(currentDirectory);
 
@@ -25,9 +24,12 @@ internal static class Program
         
         var dataPath = config.GetSection("PathSettings")["DataPath"] ?? "data";
         var logPath = config.GetSection("PathSettings")["LogPath"] ?? "logs";
+        var primaryIndexType = config.GetSection("ServerSettings")["PrimaryIndexType"] ?? "Dictionary";
+
+        var indexType = Enum.Parse<IndexType>(primaryIndexType, ignoreCase: true);
 
         // create or open the datastore before application starts
-        var store = new DataStore(dataPath);
+        var store = new DataStore(dataPath, indexType);
 
 
         ////////////////////////////////

@@ -30,7 +30,7 @@ public class PersistentStoreTest
     [Test]
     public void NewStoreHasNoCollections()
     {
-        using var store = new DataStore(StoreName);
+        using var store = new DataStore(StoreName, IndexType.Dictionary);
 
         var collections = store.GetCollectionInformation();
 
@@ -41,7 +41,7 @@ public class PersistentStoreTest
     [Test]
     public void CreateCollectionsInNewDatastore()
     {
-        using var store = new DataStore(StoreName);
+        using var store = new DataStore(StoreName, IndexType.Dictionary);
 
         var metadata = new CollectionMetadata("persons", "id", "name", "age");
 
@@ -79,7 +79,7 @@ public class PersistentStoreTest
     [Test]
     public async Task FeedANonExistentCollection()
     {
-        await using var store = new DataStore(StoreName);
+        await using var store = new DataStore(StoreName, IndexType.Dictionary);
 
         var items = new Item[] { new(new byte[100], 1, 200), new(new byte[1000], 2, 300) };
 
@@ -97,7 +97,7 @@ public class PersistentStoreTest
     [Test]
     public async Task FeedFirstVersionOfACollection()
     {
-        await using var store = new DataStore(StoreName);
+        await using var store = new DataStore(StoreName, IndexType.Dictionary);
 
         var items = new Item[] { new(new byte[100], 1, 200), new(new byte[1000], 2, 300) };
 
@@ -122,7 +122,7 @@ public class PersistentStoreTest
     [TestCase(2000, 5000)]
     public async Task FeedTwoMillionItemsInCollection(int smallObjectSize, int largeObjectSize)
     {
-        await using (var store = new DataStore(StoreName))
+        await using (var store = new DataStore(StoreName, IndexType.Dictionary))
         {
             var data1 = new byte[1000];
             var data2 = new byte[100];
@@ -155,7 +155,7 @@ public class PersistentStoreTest
 
 
         // retrieve items by primary key
-        await using (var store = new DataStore(StoreName))
+        await using (var store = new DataStore(StoreName, IndexType.Dictionary))
         {
             store.Open();
             var collections = store.GetCollectionInformation();
@@ -200,7 +200,7 @@ public class PersistentStoreTest
     [Test]
     public async Task FeedMultipleCollectionsAndRetrieveData()
     {
-        await using (var store = new DataStore(StoreName))
+        await using (var store = new DataStore(StoreName, IndexType.Dictionary))
         {
             store.Open();
 
@@ -242,7 +242,7 @@ public class PersistentStoreTest
         }
 
         // reopen the store and check the data again
-        await using (var store = new DataStore(StoreName))
+        await using (var store = new DataStore(StoreName, IndexType.Dictionary))
         {
             store.Open();
 
@@ -260,6 +260,36 @@ public class PersistentStoreTest
             content = Encoding.UTF8.GetString(item2.Data);
             Assert.That(content, Is.EqualTo("second"));
         }
+    }
+
+
+    [Test]
+    public void OpenRemovesIncompleteVersionsLeftByACrashedFeed()
+    {
+        using (var store = new DataStore(StoreName, IndexType.Dictionary))
+        {
+            store.Open();
+            store.CreateCollection(new CollectionMetadata("persons", "id"));
+            store.FeedCollection("persons", "v001", new[] { new Item(new byte[10], 1) });
+        }
+
+        // Simulate a version directory left behind by a feed that crashed before it could complete:
+        // it exists on disk but has no .complete marker.
+        var incompleteVersionPath = Path.Combine(StoreName, "persons", "v999_crashed");
+        Directory.CreateDirectory(incompleteVersionPath);
+
+        using var reopened = new DataStore(StoreName, IndexType.Dictionary);
+        reopened.Open();
+
+        Assert.That(Directory.Exists(incompleteVersionPath), Is.False,
+            "Incomplete version directory should be removed at startup");
+
+        var metadata = reopened.GetCollectionMetadata("persons");
+        Assert.That(metadata!.LastVersion, Is.EqualTo("v001"),
+            "Last version should still be the last completed feed, not the crashed one");
+
+        var item = reopened.GetByPrimaryKey("persons", 1).FirstOrDefault();
+        Assert.That(item, Is.Not.Null, "Data from the completed version should still be queryable");
     }
 
 

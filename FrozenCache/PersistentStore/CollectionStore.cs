@@ -25,9 +25,15 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 
 
     /// <summary>
-    ///     Total size of document data (one gigabyte by default)
+    ///     Total size of a segment file, including the header region (one gigabyte by default).
     /// </summary>
     private readonly int _binaryFileDataSize;
+
+    /// <summary>
+    ///     Space actually available for document bytes in a segment file, i.e. <see cref="_binaryFileDataSize" />
+    ///     minus the header region reserved for up to <see cref="_maxDocuments" /> document headers.
+    /// </summary>
+    private readonly int _maxDocumentDataSize;
 
     private readonly List<MemoryMappedFile> _files = [];
 
@@ -35,6 +41,13 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     ///     Maximum number of documents that can be stored in a binary file (one million by default)
     /// </summary>
     private readonly int _maxDocuments;
+
+    /// <summary>
+    ///     Set once the index has been built, either after a feed completes (<see cref="EndOfFeed" />) or after
+    ///     mapping existing segment files on open. Documents can only be stored before this point, and queries
+    ///     can only be answered after it.
+    /// </summary>
+    private bool _isReadOnly;
 
     private readonly List<MemoryMappedViewAccessor> _views = [];
 
@@ -76,6 +89,12 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 
         _maxDocuments = maxDocumentsInEachFile;
 
+        _maxDocumentDataSize = _binaryFileDataSize - _documentHeaderSize * _maxDocuments;
+
+        if (_maxDocumentDataSize <= 0)
+            throw new ArgumentException(
+                $"binaryFileDataSize ({_binaryFileDataSize}) is too small to hold the header region for {_maxDocuments} documents");
+
 
         StoragePath = storagePath;
 
@@ -114,7 +133,7 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     }
 
 
-    private string StoragePath { get; }
+    internal string StoragePath { get; }
 
     #region Implementation of IDisposable
 
@@ -141,11 +160,16 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     /// <exception cref="NotSupportedException"></exception>
     public void StoreNewDocument(Item documentWithKeys)
     {
-        if (documentWithKeys.Data.Length > _binaryFileDataSize)
-            throw new NotSupportedException("Document size exceeds binary file size");
+        if (_isReadOnly)
+            throw new InvalidOperationException(
+                "Cannot store new documents in a collection store that has already been sealed (fed or reopened for reads)");
+
+        if (documentWithKeys.Data.Length > _maxDocumentDataSize)
+            throw new NotSupportedException(
+                $"Document size ({documentWithKeys.Data.Length} bytes) exceeds the maximum data capacity of a segment file ({_maxDocumentDataSize} bytes)");
 
         var tooManyDocuments = _documentsInCurrentView >= _maxDocuments;
-        var tooMuchData = _firstFreeOffset + documentWithKeys.Data.Length >= _binaryFileDataSize;
+        var tooMuchData = _firstFreeOffset + documentWithKeys.Data.Length > _binaryFileDataSize;
 
 
         if (tooMuchData && !tooManyDocuments)
@@ -323,15 +347,29 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 
 
         _logger?.LogInformation("Done post-processing index");
+
+        // From this point on the store is read-only: either freshly fed data has been indexed,
+        // or an existing set of segment files has just been mapped and indexed on open.
+        _isReadOnly = true;
     }
 
+    /// <summary>
+    ///     Call after the last document has been written to flush data to disk and build the index.
+    ///     Once called, no more documents can be stored and the collection becomes queryable.
+    /// </summary>
     public void EndOfFeed()
     {
         CreateIndexes();
+
+        // ensure written document bytes and headers are durably persisted before this version is exposed for reads
+        foreach (var view in _views) view.Flush();
     }
 
     public List<Item> GetByFirstKey(long keyValue)
     {
+        if (!_isReadOnly)
+            throw new InvalidOperationException("Cannot query a collection store before it has been sealed (call EndOfFeed first)");
+
         List<Item> result = new();
 
         var entries = _primaryIndex.Get(keyValue);
