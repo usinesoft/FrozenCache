@@ -28,7 +28,7 @@ namespace PerTest
 
             if (!connector.Connect())
             {
-                Console.WriteLine("Failed to connect to server");
+                Console.WriteLine($"Failed to connect to server: {connector.LastError}");
                 return;
             }
 

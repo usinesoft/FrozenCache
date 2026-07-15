@@ -28,9 +28,17 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
 
     public bool IsHealthy => _client?.Connected == true && _stream != null;
 
+    /// <summary>
+    /// Describes why the last call to <see cref="Connect"/> returned false. Null after a successful connect,
+    /// or before the first call.
+    /// </summary>
+    public string? LastError { get; private set; }
+
     public bool Connect()
     {
         if (_client != null) throw new InvalidOperationException("Already connected");
+
+        LastError = null;
 
         try
         {
@@ -52,7 +60,10 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
             _client.NoDelay = true; // Disable Nagle's algorithm for low latency
 
             if (!_client.Connected)
+            {
+                LastError = $"Could not connect to {host}:{port}";
                 return false;
+            }
 
             var networkStream = _client.GetStream();
 
@@ -61,7 +72,21 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
                 var sslStream = new SslStream(networkStream, false,
                     validateServerCertificate ? null : (_, _, _, _) => true);
 
-                sslStream.AuthenticateAsClient(host);
+                try
+                {
+                    sslStream.AuthenticateAsClient(host);
+                }
+                catch (Exception ex) when (ex is AuthenticationException or IOException)
+                {
+                    // A plain-text server responding to a TLS ClientHello (or a certificate that fails
+                    // validation) both surface here. Either way, tell the caller exactly what to check.
+                    LastError =
+                        $"SSL handshake with {host}:{port} failed: {ex.Message}. This client has useSsl=true - " +
+                        "check that the server has ServerSettings:UseSsl enabled with a valid certificate.";
+                    sslStream.Dispose();
+                    _client.Close();
+                    return false;
+                }
 
                 _stream = sslStream;
             }
@@ -72,13 +97,10 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
 
             return true;
         }
-        catch (SocketException)
+        catch (SocketException ex)
         {
+            LastError = $"Could not connect to {host}:{port}: {ex.Message}";
             return false; // Connection failed, return false
-        }
-        catch (AuthenticationException)
-        {
-            return false; // SSL handshake failed (e.g. untrusted certificate), return false
         }
     }
 
@@ -103,8 +125,7 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
         }
         else
         {
-            var responseType = response == null ? "null" : response.GetType().Name;
-            throw new CacheException($"Unexpected response type: {responseType}");
+            throw UnexpectedResponse(response);
         }
     }
 
@@ -121,8 +142,7 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
         if (response is CollectionsDescription description)
             return description;
 
-        var responseType = response == null ? "null" : response.GetType().Name;
-        throw new CacheException($"Unexpected response type: {responseType}");
+        throw UnexpectedResponse(response);
     }
 
 
@@ -140,6 +160,9 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
             // the server will validate the request before sending data
             var result = await _stream.ReadMessageAsync(CancellationToken.None);
             if (result is StatusResponse { Success: false } statusResponse) throw new CacheException(statusResponse.ErrorMessage);
+            if (result is not StatusResponse)
+                // catch a mismatch (e.g. SSL vs plain-text) here, before uploading the whole batch
+                throw UnexpectedResponse(result);
 
 
             var writer = new BinaryWriter(_stream, Encoding.UTF8, true);
@@ -193,8 +216,7 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
         }
         else
         {
-            var responseType = response == null ? "null" : response.GetType().Name;
-            throw new CacheException($"Unexpected response type: {responseType}");
+            throw UnexpectedResponse(response);
         }
     }
 
@@ -215,7 +237,7 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
         }
         else
         {
-            throw new CacheException($"Unexpected response type: {response?.GetType().Name}");
+            throw UnexpectedResponse(response);
         }
     }
 
@@ -292,12 +314,27 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
             }
             else
             {
-                var responseType = response == null ? "null" : response.GetType().Name;
-                throw new CacheException($"Unexpected response type: {responseType}");
+                throw UnexpectedResponse(response);
             }
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// Builds a clear diagnostic for a response that wasn't of the expected type. A null response most often
+    /// means the server closed the connection right after receiving the request - the most common cause in
+    /// this codebase being an SSL/plain-text mismatch between this client and the server.
+    /// </summary>
+    private static CacheException UnexpectedResponse(IMessage? response)
+    {
+        if (response == null)
+            return new CacheException(
+                "No response received from the server (the connection was closed). This often means an " +
+                "SSL mismatch between client and server - check that this connector's useSsl setting matches " +
+                "ServerSettings:UseSsl on the server.");
+
+        return new CacheException($"Unexpected response type: {response.GetType().Name}");
     }
 
     private bool _disposed;

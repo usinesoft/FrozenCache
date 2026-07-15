@@ -110,6 +110,30 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         return Directory.Exists(Path.Combine(versionDirectoryPath, Consts.CompletedMarkerDirectoryName));
     }
 
+    /// <summary>
+    /// Deletes complete version directories of a collection beyond <see cref="CollectionMetadata.MaxVersionsToKeep" />,
+    /// oldest first. The current (newest) version is always kept, even if the configured limit is 0 or negative.
+    /// </summary>
+    private static void PruneOldVersions(string collectionPath, CollectionMetadata metadata, ILogger? logger = null)
+    {
+        var completeVersionsDirectories = Directory.EnumerateDirectories(collectionPath)
+            .Where(IsVersionComplete)
+            .OrderBy(x => x)
+            .ToList();
+
+        var maxVersionsToKeep = Math.Max(1, metadata.MaxVersionsToKeep);
+        var versionsToPrune = completeVersionsDirectories.Count - maxVersionsToKeep;
+
+        for (var i = 0; i < versionsToPrune; i++)
+        {
+            logger?.LogInformation(
+                "Pruning old version {Version} of collection {CollectionName}: retention limit is {MaxVersionsToKeep}",
+                Path.GetFileName(completeVersionsDirectories[i]), metadata.Name, maxVersionsToKeep);
+
+            Directory.Delete(completeVersionsDirectories[i], true);
+        }
+    }
+
     public void DropCollection(string name)
     {
         if (_collectionStores.TryGetValue(name, out var store))
@@ -170,6 +194,14 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
 
                 Directory.Delete(incompleteVersionDirectory, true);
             }
+
+            // enforce the collection's configured version retention limit
+            PruneOldVersions(dir, metadata, logger);
+
+            completeVersionsDirectories = Directory.EnumerateDirectories(dir)
+                .Where(IsVersionComplete)
+                .OrderBy(x => x)
+                .ToList();
 
             var lastVersion = completeVersionsDirectories.Count > 0
                 ? Path.GetFileName(completeVersionsDirectories[^1])
@@ -239,6 +271,9 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         // replace previous version if any
         if (_collectionStores.TryGetValue(collectionName, out var store)) store.Dispose();
         _collectionStores[collectionName] = collectionStore;
+
+        if (_metadataByCollection.TryGetValue(collectionName, out var metadata))
+            PruneOldVersions(Path.Combine(RootPath, collectionName), metadata);
 
         LoadCollectionsMetadata();
     }

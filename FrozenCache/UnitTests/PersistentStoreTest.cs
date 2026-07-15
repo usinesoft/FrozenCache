@@ -264,6 +264,65 @@ public class PersistentStoreTest
 
 
     [Test]
+    public void FeedingBeyondMaxVersionsToKeepPrunesOldVersions()
+    {
+        using var store = new DataStore(StoreName, IndexType.Dictionary);
+        store.Open();
+
+        store.CreateCollection(new CollectionMetadata("persons", "id") { MaxVersionsToKeep = 2 });
+
+        var collectionPath = Path.Combine(StoreName, "persons");
+
+        store.FeedCollection("persons", "v001", new[] { new Item(new byte[10], 1) });
+        store.FeedCollection("persons", "v002", new[] { new Item(new byte[10], 1) });
+
+        Assert.That(Directory.EnumerateDirectories(collectionPath).Count(), Is.EqualTo(2),
+            "Both versions should still exist: the retention limit of 2 hasn't been exceeded yet");
+
+        store.FeedCollection("persons", "v003", new[] { new Item(new byte[10], 1) });
+
+        var remainingVersions = Directory.EnumerateDirectories(collectionPath)
+            .Select(Path.GetFileName)
+            .OrderBy(x => x)
+            .ToList();
+
+        Assert.That(remainingVersions, Is.EqualTo(new[] { "v002", "v003" }),
+            "Only the 2 most recent versions should remain; v001 should have been pruned");
+
+        var item = store.GetByPrimaryKey("persons", 1).FirstOrDefault();
+        Assert.That(item, Is.Not.Null, "The current version should still be queryable after pruning");
+    }
+
+    [Test]
+    public void OpenPrunesPreExistingExcessVersions()
+    {
+        using (var store = new DataStore(StoreName, IndexType.Dictionary))
+        {
+            store.Open();
+            store.CreateCollection(new CollectionMetadata("persons", "id") { MaxVersionsToKeep = 1 });
+            store.FeedCollection("persons", "v001", new[] { new Item(new byte[10], 1) });
+            store.FeedCollection("persons", "v002", new[] { new Item(new byte[10], 1) });
+        }
+
+        // Simulate versions that accumulated on disk before version pruning existed: a complete version
+        // directory older than the current one, sitting there unpruned.
+        var legacyVersionPath = Path.Combine(StoreName, "persons", "v000_legacy");
+        Directory.CreateDirectory(legacyVersionPath);
+        Directory.CreateDirectory(Path.Combine(legacyVersionPath, Consts.CompletedMarkerDirectoryName));
+
+        using var reopened = new DataStore(StoreName, IndexType.Dictionary);
+        reopened.Open();
+
+        var remainingVersions = Directory.EnumerateDirectories(Path.Combine(StoreName, "persons"))
+            .Select(Path.GetFileName)
+            .OrderBy(x => x)
+            .ToList();
+
+        Assert.That(remainingVersions, Is.EqualTo(new[] { "v002" }),
+            "Open() should prune pre-existing excess versions down to the retention limit, keeping only the newest");
+    }
+
+    [Test]
     public void OpenRemovesIncompleteVersionsLeftByACrashedFeed()
     {
         using (var store = new DataStore(StoreName, IndexType.Dictionary))

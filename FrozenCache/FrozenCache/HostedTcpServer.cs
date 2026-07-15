@@ -229,7 +229,10 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         }
         catch (Exception ex)
         {
-            Logger.LogWarning(ex, "SSL handshake failed for incoming connection");
+            Logger.LogWarning(ex,
+                "SSL handshake failed for incoming connection from {RemoteEndPoint}. This usually means a " +
+                "client without SSL enabled connected to this SSL-enabled server.",
+                client.Client.RemoteEndPoint);
             await sslStream.DisposeAsync();
             client.Close();
             return null;

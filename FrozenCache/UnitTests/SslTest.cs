@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using CacheClient;
 using FrozenCache;
+using Messages;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -105,6 +106,67 @@ public class SslTest
 
                 Assert.That(client.Connect(), Is.False,
                     "Client should reject an untrusted self-signed certificate when validation is enabled");
+            }
+            finally
+            {
+                await server.StopAsync(CancellationToken.None);
+            }
+        }
+        finally
+        {
+            File.Delete(certPath);
+        }
+    }
+
+    [Test]
+    public async Task SslClientConnectingToPlainServerGetsAnExplicitError()
+    {
+        var logger = new Mock<ILogger<HostedTcpServer>>();
+        var dataStore = new NullDataStore();
+
+        var configuration = new Mock<IOptions<ServerSettings>>();
+        configuration.Setup(x => x.Value).Returns(new ServerSettings { Port = 0, UseSsl = false });
+
+        var server = new HostedTcpServer(dataStore, logger.Object, configuration.Object);
+        await server.StartAsync(CancellationToken.None);
+        await Task.Delay(500);
+
+        try
+        {
+            using var client = new Connector("localhost", server.Port, useSsl: true, validateServerCertificate: false);
+
+            Assert.That(client.Connect(), Is.False, "An SSL client should fail to connect to a plain-text server");
+            Assert.That(client.LastError, Does.Contain("SSL handshake"),
+                "The error should explicitly call out the SSL handshake failure, not just 'connect failed'");
+        }
+        finally
+        {
+            await server.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task PlainClientConnectingToSslServerGetsAnExplicitError()
+    {
+        var certPath = CreateSelfSignedPfx();
+
+        try
+        {
+            var server = await StartSslServer(certPath);
+
+            try
+            {
+                // useSsl defaults to false here
+                using var client = new Connector("localhost", server.Port);
+
+                Assert.That(client.Connect(), Is.True,
+                    "The plain TCP connect itself succeeds; the mismatch only surfaces at the protocol level");
+
+                var ex = Assert.ThrowsAsync<CacheException>(async () =>
+                    await client.CreateCollection("testCollection", "id"));
+
+                Assert.That(ex!.Message, Does.Contain("SSL"),
+                    "The error should explicitly call out the likely SSL mismatch, not just 'unexpected response'");
             }
             finally
             {
