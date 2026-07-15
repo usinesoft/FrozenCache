@@ -1,6 +1,8 @@
 ﻿using System.Diagnostics;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading.Channels;
 using Messages;
@@ -30,6 +32,8 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
     private readonly FeedItemBatchSerializer _batchSerializer = new();
     private TcpListener? _listener;
 
+    private X509Certificate2? _serverCertificate;
+
     private bool _disposed;
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -41,6 +45,18 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
         try
         {
+            if (Configuration.Value.UseSsl)
+            {
+                if (IsNullOrWhiteSpace(Configuration.Value.SslCertificatePath))
+                    throw new InvalidOperationException(
+                        "ServerSettings:SslCertificatePath must be set when ServerSettings:UseSsl is true");
+
+                _serverCertificate = X509CertificateLoader.LoadPkcs12FromFile(
+                    Configuration.Value.SslCertificatePath, Configuration.Value.SslCertificatePassword);
+
+                Logger.LogInformation("SSL enabled, using certificate {Subject}", _serverCertificate.Subject);
+            }
+
             _listener = new TcpListener(IPAddress.Any, Configuration.Value.Port);
             _listener.Server.NoDelay = true; // Disable Nagle's algorithm for low latency
 
@@ -97,9 +113,16 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
     private async Task ClientLoop(CancellationToken cancellationToken, TcpClient client)
     {
+        Stream? stream = null;
+
         try
         {
-            await using var stream = client.GetStream();
+            stream = await EstablishStreamAsync(client, cancellationToken);
+
+            if (stream == null)
+                // SSL handshake failed; already logged and the connection already closed
+                return;
+
             while (!cancellationToken.IsCancellationRequested)
             {
                 var message = await stream.ReadMessageAsync(cancellationToken);
@@ -150,31 +173,70 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         {
             // Client disconnected or operation was cancelled
             Logger.LogWarning("Cancellation requested");
-            await client.GetStream().WriteMessageAsync(
-                new StatusResponse { Success = false, ErrorMessage = "Operation cancelled" },
-                cancellationToken);
+            if (stream != null)
+                await stream.WriteMessageAsync(
+                    new StatusResponse { Success = false, ErrorMessage = "Operation cancelled" },
+                    cancellationToken);
         }
         catch (CacheException cacheEx)
         {
             Logger.LogError("Cache error processing client request: {Message}", cacheEx.Message);
-            await client.GetStream().WriteMessageAsync(
-                new StatusResponse { Success = false, ErrorMessage = cacheEx.Message },
-                cancellationToken);
+            if (stream != null)
+                await stream.WriteMessageAsync(
+                    new StatusResponse { Success = false, ErrorMessage = cacheEx.Message },
+                    cancellationToken);
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Error processing client request: {Message}", ex.Message);
-            await client.GetStream().WriteMessageAsync(
-                new StatusResponse { Success = false, ErrorMessage = ex.Message },
-                cancellationToken);
+            if (stream != null)
+                await stream.WriteMessageAsync(
+                    new StatusResponse { Success = false, ErrorMessage = ex.Message },
+                    cancellationToken);
         }
         finally
         {
+            if (stream != null)
+                await stream.DisposeAsync();
+
             client.Close();
         }
     }
 
-    private async Task ProcessDropCollection(DropCollectionRequest dropCollectionRequest, NetworkStream stream,
+    /// <summary>
+    /// Returns the plain network stream, or - when <see cref="ServerSettings.UseSsl"/> is enabled - a
+    /// <see cref="SslStream"/> upgraded from it via a TLS handshake. Returns null if the handshake fails, in
+    /// which case the connection has already been logged and closed.
+    /// </summary>
+    private async Task<Stream?> EstablishStreamAsync(TcpClient client, CancellationToken cancellationToken)
+    {
+        var networkStream = client.GetStream();
+
+        if (!Configuration.Value.UseSsl)
+            return networkStream;
+
+        var sslStream = new SslStream(networkStream, false);
+
+        try
+        {
+            await sslStream.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+            {
+                ServerCertificate = _serverCertificate,
+                ClientCertificateRequired = false
+            }, cancellationToken);
+
+            return sslStream;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "SSL handshake failed for incoming connection");
+            await sslStream.DisposeAsync();
+            client.Close();
+            return null;
+        }
+    }
+
+    private async Task ProcessDropCollection(DropCollectionRequest dropCollectionRequest, Stream stream,
         CancellationToken cancellationToken)
     {
         try

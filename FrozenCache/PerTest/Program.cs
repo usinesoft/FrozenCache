@@ -9,15 +9,22 @@ namespace PerTest
     {
         static async Task Main(string[] args)
         {
-            string action = args.Length > 0 ? args[0] : "read";
+            // --ssl is a flag, not positional, so it can be added anywhere without disturbing the
+            // existing action/count/version positional arguments
+            bool useSsl = args.Any(a => a.Equals("--ssl", StringComparison.OrdinalIgnoreCase));
+            string[] positional = args.Where(a => !a.StartsWith("--")).ToArray();
 
-            int count = args.Length > 1 ? int.Parse(args[1]) : 2_000_000;
+            string action = positional.Length > 0 ? positional[0] : "read";
 
-            string? version = args.Length > 2 ? args[2] : null;
+            int count = positional.Length > 1 ? int.Parse(positional[1]) : 2_000_000;
 
-            Console.WriteLine($"Action:{action}");
+            string? version = positional.Length > 2 ? positional[2] : null;
 
-            var connector = new Connector("localhost", 5123);
+            Console.WriteLine($"Action:{action}, Ssl:{useSsl}");
+
+            // certificate validation is skipped: this tool is meant to run against a local/dev server,
+            // typically using a self-signed certificate
+            var connector = new Connector("localhost", 5123, useSsl: useSsl, validateServerCertificate: false);
 
             if (!connector.Connect())
             {

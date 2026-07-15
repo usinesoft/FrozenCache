@@ -20,6 +20,8 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
     private readonly string _server;
     private readonly int _port;
     private readonly int _capacity;
+    private readonly bool _useSsl;
+    private readonly bool _validateServerCertificate;
 
     /// <summary>
     ///     Watchdog task to monitor the connection status and reconnect if necessary.
@@ -42,7 +44,8 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
     ///     available.
     ///     One pool is created for each cache server.
     /// </summary>
-    public ConnectorPool(int capacity, string server, int port, int watchDogFrequencyInMilliseconds = 10_000)
+    public ConnectorPool(int capacity, string server, int port, int watchDogFrequencyInMilliseconds = 10_000,
+        bool useSsl = false, bool validateServerCertificate = true)
     {
         if (capacity < 1) throw new ArgumentOutOfRangeException(nameof(capacity), "Capacity must be at least 1");
 
@@ -58,6 +61,8 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
         _port = port;
 
         _capacity = capacity;
+        _useSsl = useSsl;
+        _validateServerCertificate = validateServerCertificate;
 
         InternalConnect();
 
@@ -103,7 +108,7 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
 
                         try
                         {
-                            using var connector = new Connector(_server, _port);
+                            using var connector = new Connector(_server, _port, _useSsl, _validateServerCertificate);
 
 
                             if (connector.Connect())
@@ -170,7 +175,7 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
         
             for (var i = 0; i < _capacity; i++)
             {
-                var connector = new Connector(_server, _port);
+                var connector = new Connector(_server, _port, _useSsl, _validateServerCertificate);
                 if (connector.Connect()) _pool.Writer.TryWrite(connector);
             }
 

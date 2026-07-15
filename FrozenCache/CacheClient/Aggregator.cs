@@ -13,18 +13,18 @@ public class Aggregator
 {
     private readonly List<ConnectorPool> _pools = [];
 
-    private readonly Dictionary<string, LocalCache.LruLocalCache> _localCaches = new();
+    private readonly Dictionary<string, LruLocalCache> _localCaches = new();
 
     public void ConfigureLocalCache(string collectionName, int capacity)
     {
-        _localCaches[collectionName] = new LocalCache.LruLocalCache(key =>
+        _localCaches[collectionName] = new LruLocalCache(key =>
         {
             // if the item is not in the local cache, we try to get it from the servers
             var item = InternalQueryRawDataByPrimaryKey(collectionName, key).GetAwaiter().GetResult();
             if (item.Count == 0)
                 return null; // not found on the server either
 
-            return new LocalCache.CachedItem
+            return new CachedItem
             {
                 PrimaryKey = key,
                 Data = item[0]
@@ -38,12 +38,27 @@ public class Aggregator
     /// <param name="capacity">Maximum capacity of each pool.</param>
     /// <param name="servers">List of server addresses and ports.</param>
     public Aggregator(int capacity, params (string server, int port)[] servers)
+        : this(capacity, false, true, servers)
+    {
+    }
+
+    /// <summary>
+    /// Creates an aggregator for multiple cache server replicas, connecting over TLS.
+    /// </summary>
+    /// <param name="capacity">Maximum capacity of each pool.</param>
+    /// <param name="useSsl">Wrap every connection in TLS. Every replica's server must have SSL enabled too.</param>
+    /// <param name="validateServerCertificate">
+    /// When true (the default), each server certificate must be trusted and match its host. Set to false only
+    /// for testing against a self-signed/untrusted certificate.
+    /// </param>
+    /// <param name="servers">List of server addresses and ports.</param>
+    public Aggregator(int capacity, bool useSsl, bool validateServerCertificate, params (string server, int port)[] servers)
     {
         if (servers == null || servers.Length == 0) throw new ArgumentNullException(nameof(servers), "At least one server must be specified");
 
         foreach (var (server, port) in servers)
         {
-            _pools.Add(new ConnectorPool(capacity, server, port));
+            _pools.Add(new ConnectorPool(capacity, server, port, useSsl: useSsl, validateServerCertificate: validateServerCertificate));
         }
     }
 

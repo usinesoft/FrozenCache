@@ -1,13 +1,22 @@
 ﻿using System.Buffers;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Authentication;
 using System.Text;
 using Messages;
 using PersistentStore;
 
 namespace CacheClient;
 
-public sealed class Connector(string host, int port) : IDisposable
+/// <param name="host"></param>
+/// <param name="port"></param>
+/// <param name="useSsl">Wrap the connection in TLS. The server must have <c>ServerSettings:UseSsl</c> enabled too.</param>
+/// <param name="validateServerCertificate">
+/// When true (the default), the server certificate must be trusted and match <paramref name="host" />. Set to
+/// false only for testing against a self-signed/untrusted certificate - it disables all certificate checks.
+/// </param>
+public sealed class Connector(string host, int port, bool useSsl = false, bool validateServerCertificate = true) : IDisposable
 {
     private TcpClient? _client;
 
@@ -42,16 +51,34 @@ public sealed class Connector(string host, int port) : IDisposable
 
             _client.NoDelay = true; // Disable Nagle's algorithm for low latency
 
-            _stream = _client.GetStream();
+            if (!_client.Connected)
+                return false;
 
-            if (_client.Connected)
-                return true;
+            var networkStream = _client.GetStream();
 
-            return false;
+            if (useSsl)
+            {
+                var sslStream = new SslStream(networkStream, false,
+                    validateServerCertificate ? null : (_, _, _, _) => true);
+
+                sslStream.AuthenticateAsClient(host);
+
+                _stream = sslStream;
+            }
+            else
+            {
+                _stream = networkStream;
+            }
+
+            return true;
         }
         catch (SocketException)
         {
             return false; // Connection failed, return false
+        }
+        catch (AuthenticationException)
+        {
+            return false; // SSL handshake failed (e.g. untrusted certificate), return false
         }
     }
 
