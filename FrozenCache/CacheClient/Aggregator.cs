@@ -1,4 +1,5 @@
-﻿using System.Net.Sockets;
+﻿using System.Diagnostics;
+using System.Net.Sockets;
 using System.Threading.Channels;
 using CacheClient.LocalCache;
 using Messages;
@@ -17,16 +18,90 @@ public class Aggregator
 
     /// <summary>
     /// Raised whenever any replica reports that a collection's last version has changed. The corresponding
-    /// local cache (if any) has already been cleared by the time this fires.
+    /// local cache (if any) has already been cleared, and <see cref="GetLastVersion"/>/
+    /// <see cref="GetPoolsWithLastVersion"/> already reflect the change, by the time this fires.
     /// </summary>
     public event EventHandler<NewVersionEventArgs>? NewVersion;
+
+    private readonly object _versionMapLock = new();
+
+    /// <summary>
+    /// Highest version known across all replicas, by collection name. Membership of "which servers have it" is
+    /// deliberately not tracked here as a separate set - it's derived on demand from each pool's own
+    /// <see cref="ConnectorPool.LastKnownVersions"/> in <see cref="GetPoolsWithLastVersion"/>, so there is a
+    /// single source of truth per pool instead of two copies of the same fact that could drift apart.
+    /// </summary>
+    private readonly Dictionary<string, string> _clusterLastVersion = new();
 
     private void OnPoolNewVersion(object? sender, NewVersionEventArgs e)
     {
         if (_localCaches.TryGetValue(e.CollectionName, out var cache))
             cache.Clear();
 
+        lock (_versionMapLock)
+        {
+            AdvanceClusterLastVersionLocked(e.CollectionName, e.NewVersion);
+        }
+
         NewVersion?.Invoke(this, e);
+    }
+
+    /// <summary>
+    /// Recomputes the cluster-wide last version for every collection from what each pool currently knows.
+    /// Called once, right after all pools are connected, to build the initial picture; ongoing changes are
+    /// then folded in incrementally by <see cref="OnPoolNewVersion"/> as replicas report them.
+    /// </summary>
+    private void RebuildClusterLastVersions()
+    {
+        lock (_versionMapLock)
+        {
+            foreach (var pool in _pools)
+            foreach (var (collectionName, version) in pool.LastKnownVersions)
+                AdvanceClusterLastVersionLocked(collectionName, version);
+        }
+    }
+
+    /// <summary>
+    /// Updates the tracked cluster-wide last version for a collection if <paramref name="version"/> is newer
+    /// than what's currently tracked - never backward, so a slow or stale replica reporting an older version
+    /// can't regress what's considered current. Must be called while holding <see cref="_versionMapLock"/>.
+    /// </summary>
+    private void AdvanceClusterLastVersionLocked(string collectionName, string version)
+    {
+        if (!_clusterLastVersion.TryGetValue(collectionName, out var currentMax) ||
+            string.Compare(version, currentMax, StringComparison.InvariantCultureIgnoreCase) > 0)
+            _clusterLastVersion[collectionName] = version;
+    }
+
+    /// <summary>
+    /// The highest version known across all replicas for a collection, or null if none is known yet (e.g. the
+    /// collection doesn't exist, or hasn't been fed, or no replica has reported it yet).
+    /// </summary>
+    public string? GetLastVersion(string collectionName)
+    {
+        lock (_versionMapLock)
+        {
+            return _clusterLastVersion.GetValueOrDefault(collectionName);
+        }
+    }
+
+    /// <summary>
+    /// The pools whose own last known version for a collection matches the cluster-wide last version. A pool
+    /// that hasn't reported in yet, or is behind, is not included. Empty if no replica is known to have a
+    /// version of this collection at all.
+    /// </summary>
+    public IReadOnlyList<ConnectorPool> GetPoolsWithLastVersion(string collectionName)
+    {
+        string? lastVersion;
+        lock (_versionMapLock)
+        {
+            if (!_clusterLastVersion.TryGetValue(collectionName, out lastVersion))
+                return [];
+        }
+
+        return _pools
+            .Where(p => p.LastKnownVersions.TryGetValue(collectionName, out var version) && version == lastVersion)
+            .ToList();
     }
 
     public void ConfigureLocalCache(string collectionName, int capacity)
@@ -81,6 +156,10 @@ public class Aggregator
             pool.NewVersion += OnPoolNewVersion;
             _pools.Add(pool);
         }
+
+        // each pool has already established its own version baseline by the time its constructor returns
+        // (see ConnectorPool.InternalConnect), so this reflects the true state at connection time
+        RebuildClusterLastVersions();
     }
 
     /// <summary>
@@ -88,7 +167,14 @@ public class Aggregator
     /// </summary>
     private int _lastServer;
 
-    private async Task<Connector> Get()
+    /// <param name="collectionName">
+    /// When given, prefer replicas known to have this collection's last version. If none are known to have
+    /// it (e.g. right after a feed, before every replica's watchdog has caught up, or no replica has reported
+    /// this collection yet), falls back to any connected replica rather than fail the call - deliberately, so
+    /// this can never throw for a reason <see cref="InternalQueryRawDataByPrimaryKey"/>'s unconditional retry
+    /// loop can't recover from (it retries on any exception with no backoff).
+    /// </param>
+    private async Task<Connector> Get(string? collectionName = null)
     {
         var connected = _pools.Where(x => x.IsConnected).ToArray();
 
@@ -97,16 +183,29 @@ public class Aggregator
             throw new InvalidOperationException("No connected pools available. Please check the connection status of the servers.");
         }
 
-        // Round-robin selection of the next available pool
-        var pool = connected[_lastServer % connected.Length];
-        
-        _lastServer = (_lastServer + 1) % connected.Length; // Round-robin selection
+        var candidates = connected;
 
-        if(pool.IsConnected)
+        if (collectionName != null)
+        {
+            var upToDate = GetPoolsWithLastVersion(collectionName).Where(p => p.IsConnected).ToArray();
+
+            if (upToDate.Length > 0)
+                candidates = upToDate;
+            else
+                Debug.Print(
+                    $"Get : no replica confirmed at the last version for '{collectionName}' yet, falling back to any connected replica");
+        }
+
+        // Round-robin selection of the next available pool
+        var pool = candidates[_lastServer % candidates.Length];
+
+        _lastServer = (_lastServer + 1) % candidates.Length; // Round-robin selection
+
+        if (pool.IsConnected)
             return await pool.Get();
 
         // If the selected pool is not connected, try to get from another pool
-        return await Get();
+        return await Get(collectionName);
     }
 
     private void Return(Connector connector)
@@ -225,7 +324,7 @@ public class Aggregator
         Connector? connector = null;
         try
         {
-            connector = await Get();
+            connector = await Get(collection);
             return await connector.QueryByPrimaryKey(collection, keys);
         }
         catch (Exception)

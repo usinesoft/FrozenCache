@@ -61,6 +61,9 @@ public static class StreamingHelper
                 case MessageType.CollectionsDescription:
                     MessagePackSerializer.Serialize(_memoryStream, message as CollectionsDescription);
                     break;
+                case MessageType.StreamAllDataRequest:
+                    MessagePackSerializer.Serialize(_memoryStream, message as StreamAllDataRequest);
+                    break;
                 default:
                     throw new NotSupportedException("Unknown message type to stream");
             }
@@ -124,6 +127,7 @@ public static class StreamingHelper
                     MessageType.StatusResponse => MessagePackSerializer.Deserialize<StatusResponse>(buffer),
                     MessageType.QueryByPrimaryKeyRequest => MessagePackSerializer.Deserialize<QueryByPrimaryKey>(buffer),
                     MessageType.QueryResponse => MessagePackSerializer.Deserialize<ResultWithData>(buffer),
+                    MessageType.StreamAllDataRequest => MessagePackSerializer.Deserialize<StreamAllDataRequest>(buffer.AsMemory(0, size)),
                     _ => throw new InvalidOperationException($"Unknown message type: {messageType}")
                 };
             }

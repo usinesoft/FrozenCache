@@ -322,6 +322,39 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
     }
 
     /// <summary>
+    ///     Streams every document currently in a collection's active version. Uses the same manual big-batch
+    ///     framing as a feed session, in reverse: the server acknowledges the request, then streams batches
+    ///     terminated by an empty one.
+    /// </summary>
+    /// <param name="collection">name of an existing, already fed collection</param>
+    public async IAsyncEnumerable<Item> StreamAllData(string collection)
+    {
+        if (_client == null || _stream == null) throw new InvalidOperationException("Not connected to server");
+
+        var request = new StreamAllDataRequest { CollectionName = collection };
+        await _stream.WriteMessageAsync(request, CancellationToken.None);
+
+        var ack = await _stream.ReadMessageAsync(CancellationToken.None);
+        if (ack is StatusResponse { Success: false } status)
+            throw new CacheException($"Failed to stream collection: {status.ErrorMessage}");
+        if (ack is not StatusResponse)
+            throw UnexpectedResponse(ack);
+
+        var reader = new BinaryReader(_stream, Encoding.UTF8, true);
+
+        while (true)
+        {
+            var batch = _batchSerializer.Deserialize(reader);
+
+            if (batch.Count == 0)
+                yield break; // end of stream
+
+            foreach (var feedItem in batch)
+                yield return new Item(feedItem.Data, feedItem.Keys);
+        }
+    }
+
+    /// <summary>
     /// Builds a clear diagnostic for a response that wasn't of the expected type. A null response most often
     /// means the server closed the connection right after receiving the request - the most common cause in
     /// this codebase being an SSL/plain-text mismatch between this client and the server.

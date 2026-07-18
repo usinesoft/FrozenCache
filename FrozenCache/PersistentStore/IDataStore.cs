@@ -42,6 +42,12 @@ public interface IDataStore
     public List<Item> GetByPrimaryKey(string collectionName, long keyValue);
 
     /// <summary>
+    /// Enumerates every document currently in a collection's active version, in on-disk order.
+    /// </summary>
+    /// <param name="collectionName">name of an existing, already fed collection</param>
+    public IEnumerable<Item> StreamAllData(string collectionName);
+
+    /// <summary>
     /// Create a new version of a collection and index it in memory.
     /// The collection must already exist. This new version will be available when iteration ends;
     /// </summary>

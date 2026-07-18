@@ -53,6 +53,11 @@ public class NullDataStore : IDataStore
         return [];
     }
 
+    public IEnumerable<Item> StreamAllData(string collectionName)
+    {
+        throw new NotImplementedException();
+    }
+
     public int FeedCollection(string collectionName, string newVersion, IEnumerable<Item> items)
     {
         var watch = Stopwatch.StartNew();

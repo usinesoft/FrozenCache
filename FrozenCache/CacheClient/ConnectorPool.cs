@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Threading.Channels;
 using Messages;
 
@@ -25,10 +26,16 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
     public event EventHandler<NewVersionEventArgs>? NewVersion;
 
     /// <summary>
-    /// Last version seen for each collection, by collection name. Only ever touched by the watchdog task,
-    /// which runs one iteration at a time, so no locking is needed.
+    /// Last version seen for each collection, by collection name. Written only by the watchdog task (which
+    /// runs one iteration at a time), but read by arbitrary caller threads wanting to route a query to a
+    /// server known to have a specific collection's latest version - hence the concurrent dictionary.
     /// </summary>
-    private readonly Dictionary<string, string> _lastKnownVersions = new();
+    private readonly ConcurrentDictionary<string, string> _lastKnownVersions = new();
+
+    /// <summary>
+    /// Last known version of every collection this server has reported, by collection name.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> LastKnownVersions => _lastKnownVersions;
 
     private readonly string _server;
     private readonly int _port;
@@ -199,41 +206,64 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
 
     /// <summary>
     /// Fetches the current collections description from the server and raises <see cref="NewVersion"/> for
-    /// every collection whose last version differs from the one observed on the previous check. A collection
-    /// seen for the first time only establishes the baseline - it does not raise an event.
+    /// every collection whose last version differs from the one observed on the previous check.
     /// </summary>
-    private async Task CheckCollectionVersions(Connector connector)
+    /// <param name="connector"></param>
+    /// <param name="raiseEvents">
+    /// When false, versions are recorded but no event is raised even for a collection observed for the first
+    /// time. Used for the one-off baseline established right after connecting, so that a freshly (re)connected
+    /// pool doesn't fire an event for every pre-existing collection it just discovered. Regular watchdog ticks
+    /// always raise events (the default), including for a collection seen for the first time on this pool -
+    /// once the baseline exists, a genuinely new name showing up is real news.
+    /// </param>
+    private async Task CheckCollectionVersions(Connector connector, bool raiseEvents = true)
     {
         var description = await connector.GetCollectionsDescription();
 
         foreach (var collection in description.Collections)
         {
-            if (_lastKnownVersions.TryGetValue(collection.Name, out var previousVersion))
-            {
-                if (previousVersion == collection.LastVersion)
-                    continue;
+            if (_lastKnownVersions.TryGetValue(collection.Name, out var previousVersion) &&
+                previousVersion == collection.LastVersion)
+                continue;
 
-                _lastKnownVersions[collection.Name] = collection.LastVersion;
+            _lastKnownVersions[collection.Name] = collection.LastVersion;
+
+            if (raiseEvents)
                 NewVersion?.Invoke(this, new NewVersionEventArgs(collection.Name, collection.LastVersion));
-            }
-            else
-            {
-                _lastKnownVersions[collection.Name] = collection.LastVersion;
-            }
         }
     }
 
     private void InternalConnect()
     {
-        
-            for (var i = 0; i < _capacity; i++)
-            {
-                var connector = new Connector(_server, _port, _useSsl, _validateServerCertificate);
-                if (connector.Connect()) _pool.Writer.TryWrite(connector);
-            }
+        for (var i = 0; i < _capacity; i++)
+        {
+            var connector = new Connector(_server, _port, _useSsl, _validateServerCertificate);
+            if (connector.Connect()) _pool.Writer.TryWrite(connector);
+        }
 
-            IsConnected = _pool.Reader.TryPeek(out _);
-        
+        IsConnected = _pool.Reader.TryPeek(out _);
+
+        if (!IsConnected)
+            return;
+
+        // establish the collection-version baseline immediately, so a caller has usable data as soon as
+        // this pool reports connected, instead of waiting for the first watchdog tick
+        try
+        {
+            var connector = Get().GetAwaiter().GetResult();
+            try
+            {
+                CheckCollectionVersions(connector, raiseEvents: false).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                Return(connector);
+            }
+        }
+        catch (Exception)
+        {
+            Debug.Print("InternalConnect : exception while establishing the initial version baseline");
+        }
     }
 
 

@@ -62,7 +62,7 @@ public class ConnectorPoolVersionWatchTest
             "No event should be raised for the version observed on the first check, only on a change");
 
         // feed a new version while the pool is watching
-        _store.FeedCollection("persons", "v002", new[] { new Item(new byte[10], 1) });
+        _store.FeedCollection("persons", "v002", [new Item(new byte[10], 1)]);
 
         var deadline = DateTime.UtcNow.AddSeconds(5);
         while (DateTime.UtcNow < deadline && events.Count == 0)

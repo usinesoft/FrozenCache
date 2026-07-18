@@ -383,6 +383,66 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 
         return result;
     }
+
+    /// <summary>
+    ///     Enumerates every document currently stored, in on-disk order, without going through the index.
+    ///     Used to stream a full copy of a collection to a client.
+    /// </summary>
+    public IEnumerable<Item> GetAllItems()
+    {
+        if (!_isReadOnly)
+            throw new InvalidOperationException("Cannot query a collection store before it has been sealed (call EndOfFeed first)");
+
+        for (var fileIndex = 0; fileIndex < _views.Count; fileIndex++)
+        {
+            var view = _views[fileIndex];
+
+            foreach (var header in ReadFileHeaders(view))
+            {
+                var data = new byte[header.Length];
+                ReadBytes(header.OffsetInFile, header.Length, view, data);
+
+                yield return new Item(data, header.IndexKeys);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Reads every non-end-marker document header from a segment file. Split out from <see cref="GetAllItems" />
+    ///     because iterator methods cannot contain unsafe code.
+    /// </summary>
+    private unsafe List<PersistentObjectHeader> ReadFileHeaders(MemoryMappedViewAccessor view)
+    {
+        var headers = new List<PersistentObjectHeader>();
+        var buffer = new byte[_documentHeaderSize];
+        var ptr = (byte*)0;
+
+        try
+        {
+            view.SafeMemoryMappedViewHandle.AcquirePointer(ref ptr);
+
+            for (var i = 0; i < _maxDocuments; i++)
+            {
+                Marshal.Copy(new IntPtr(ptr), buffer, 0, _documentHeaderSize);
+
+                var header = new PersistentObjectHeader();
+                header.FromBytes(buffer);
+
+                if (header.IsEndMarker)
+                    break;
+
+                headers.Add(header);
+
+                ptr += _documentHeaderSize;
+            }
+        }
+        finally
+        {
+            view.SafeMemoryMappedViewHandle.ReleasePointer();
+        }
+
+        return headers;
+    }
 }
 
 /// <summary>

@@ -229,6 +229,11 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         return _collectionStores[collectionName].GetByFirstKey(keyValue);
     }
 
+    public IEnumerable<Item> StreamAllData(string collectionName)
+    {
+        return _collectionStores[collectionName].GetAllItems();
+    }
+
     private CollectionStore BeginFeed(string collectionName, string newVersion)
     {
         if (!_opened)

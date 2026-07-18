@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using System.Buffers;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -161,6 +162,9 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
                     case QueryByPrimaryKey queryRequest:
                         await ProcessSimpleQuery(queryRequest, stream, cancellationToken);
                         break;
+                    case StreamAllDataRequest streamAllDataRequest:
+                        await ProcessStreamAllData(streamAllDataRequest, stream, cancellationToken);
+                        break;
                     default:
                         Logger.LogWarning("Unknown message type received: {Type}", message.GetType().Name);
                         await stream.WriteMessageAsync(new StatusResponse
@@ -291,6 +295,78 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         catch (Exception e)
         {
             await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = e.Message }, ct);
+        }
+    }
+
+    /// <summary>
+    /// Streams every document currently in a collection's active version to the client, using the same
+    /// manual big-batch framing as a feed session (<see cref="FeedItemBatchSerializer"/>), terminated by an
+    /// empty batch. Validation happens before the initial acknowledgement; once that's sent, the client's
+    /// reader is committed to batch framing, so a failure from that point on can no longer be reported as a
+    /// StatusResponse - it just ends the connection, the same way a feed's own network failures do.
+    /// </summary>
+    private async Task ProcessStreamAllData(StreamAllDataRequest request, Stream stream, CancellationToken ct)
+    {
+        var collectionName = request.CollectionName;
+
+        try
+        {
+            if (IsNullOrWhiteSpace(collectionName))
+                throw new CacheException("Collection name is required");
+
+            var metadata = Store.GetCollectionMetadata(collectionName);
+            if (metadata == null)
+                throw new CacheException($"Collection {collectionName} does not exist");
+
+            if (metadata.LastVersion == null)
+                throw new CacheException($"Collection {collectionName} has no data to stream");
+        }
+        catch (Exception e)
+        {
+            Logger.LogError("Error while starting to stream collection {Collection}: {Message}", collectionName, e.Message);
+            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = e.Message }, ct);
+            return;
+        }
+
+        await stream.WriteMessageAsync(new StatusResponse(), ct);
+
+        Logger.LogInformation("Streaming all data for collection {Collection}", collectionName);
+
+        var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+
+        const int maxBatchSize = 1_000_000; // 1 MB per batch
+        const int maxMessagesPerBatch = 5_000; // 5_000 items per batch
+
+        var batch = ArrayPool<FeedItem>.Shared.Rent(maxMessagesPerBatch);
+        try
+        {
+            var batchSize = 0;
+
+            foreach (var item in Store.StreamAllData(collectionName))
+            {
+                batch[batchSize++] = new FeedItem { Data = item.Data, Keys = item.Keys };
+
+                if (batchSize >= maxMessagesPerBatch)
+                {
+                    _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize), maxBatchSize);
+                    batchSize = 0;
+                }
+            }
+
+            _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize));
+
+            if (batchSize != 0) // if the last one was not empty, write an empty batch as the end marker
+                _batchSerializer.Serialize(writer, Array.Empty<FeedItem>());
+
+            Logger.LogInformation("Finished streaming collection {Collection}", collectionName);
+        }
+        catch (Exception e)
+        {
+            Logger.LogError(e, "Error while streaming collection {Collection}: {Message}", collectionName, e.Message);
+        }
+        finally
+        {
+            ArrayPool<FeedItem>.Shared.Return(batch);
         }
     }
 

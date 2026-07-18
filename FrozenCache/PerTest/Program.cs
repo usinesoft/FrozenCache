@@ -38,6 +38,10 @@ namespace PerTest
             {
                 await FeedData(connector, count, version);
             }
+            else if (action == "stream")
+            {
+                await StreamData(connector);
+            }
             else
             {
                 await ReadData(connector, count);
@@ -73,6 +77,26 @@ namespace PerTest
             await QueryByBatch(connector, 100, 100, maxId);
             watch.Stop();
             Console.WriteLine($"Reading 100 times 100 objects took {watch.ElapsedMilliseconds} ms");
+        }
+
+        private static async Task StreamData(Connector connector)
+        {
+            var watch = Stopwatch.StartNew();
+
+            long count = 0;
+
+            await foreach (var _ in connector.StreamAllData("big"))
+            {
+                count++;
+
+                if (count % 100_000 == 0)
+                    Console.Write('.');
+            }
+
+            watch.Stop();
+
+            Console.WriteLine();
+            Console.WriteLine($"Streamed {count} items in {watch.ElapsedMilliseconds} ms");
         }
 
         private static async Task QueryByBatch(Connector connector, int batchSize, int iterations, int maxId)

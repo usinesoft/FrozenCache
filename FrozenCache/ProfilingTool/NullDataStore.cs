@@ -33,6 +33,11 @@ public class NullDataStore : IDataStore
         throw new NotImplementedException();
     }
 
+    public IEnumerable<Item> StreamAllData(string collectionName)
+    {
+        throw new NotImplementedException();
+    }
+
     public int FeedCollection(string collectionName, string newVersion, IEnumerable<Item> items)
     {
         var watch = Stopwatch.StartNew();
