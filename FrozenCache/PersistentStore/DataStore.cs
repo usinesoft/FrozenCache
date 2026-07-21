@@ -130,7 +130,21 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
                 "Pruning old version {Version} of collection {CollectionName}: retention limit is {MaxVersionsToKeep}",
                 Path.GetFileName(completeVersionsDirectories[i]), metadata.Name, maxVersionsToKeep);
 
-            Directory.Delete(completeVersionsDirectories[i], true);
+            try
+            {
+                Directory.Delete(completeVersionsDirectories[i], true);
+            }
+            catch (Exception e)
+            {
+                // Its segment files may still be memory-mapped by a client that's mid-read (a point lookup,
+                // or a long-running StreamAllData) when this version was superseded - CollectionStore defers
+                // the actual file disposal until that read finishes, so deletion can legitimately fail here.
+                // Leave the directory in place; it will be reconsidered - and should succeed - next time a
+                // feed or startup triggers pruning again.
+                logger?.LogWarning(e,
+                    "Could not prune old version {Version} of collection {CollectionName}, likely still in use by an active read; will retry later",
+                    Path.GetFileName(completeVersionsDirectories[i]), metadata.Name);
+            }
         }
     }
 
@@ -273,7 +287,9 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         // only now that data and index are safely on disk can this version be marked as valid
         Directory.CreateDirectory(Path.Combine(collectionStore.StoragePath, Consts.CompletedMarkerDirectoryName));
 
-        // replace previous version if any
+        // Replace previous version if any. CollectionStore.Dispose() defers the actual cleanup if a stream
+        // is currently reading this exact instance (a point lookup wouldn't hold a reference this long, so
+        // this only matters for StreamAllData) - it resolves itself once that stream finishes.
         if (_collectionStores.TryGetValue(collectionName, out var store)) store.Dispose();
         _collectionStores[collectionName] = collectionStore;
 

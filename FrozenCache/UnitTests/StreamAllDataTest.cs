@@ -127,6 +127,63 @@ public class StreamAllDataTest
         Assert.That(ex!.Message, Does.Contain("no data"));
     }
 
+    /// <summary>
+    /// Reproduces the reported race: a client feeding a new version of a collection used to dispose the
+    /// memory-mapped files of the version another client was still streaming, out from under it. Feeds a
+    /// third version too, low enough retention that the version being streamed becomes a prune target while
+    /// still leased - proving that a failed prune (blocked by the active read) doesn't break the feed either.
+    /// </summary>
+    [Test]
+    public async Task StreamingContinuesSafelyWhileNewVersionsAreFedConcurrently()
+    {
+        const int itemCount = 50_000;
+
+        _store.CreateCollection(new CollectionMetadata("persons", "id") { MaxVersionsToKeep = 2 });
+        _store.FeedCollection("persons", "v001", GenerateMarkedItems(itemCount, marker: 1));
+
+        using var streamingConnector = new Connector("localhost", _server!.Port);
+        streamingConnector.Connect();
+
+        using var feedingConnector = new Connector("localhost", _server!.Port);
+        feedingConnector.Connect();
+
+        var received = new List<Item>();
+
+        await using var enumerator = streamingConnector.StreamAllData("persons").GetAsyncEnumerator();
+
+        // consume a handful of items first, to make sure the stream is genuinely mid-flight (holding a read
+        // lease on v001's CollectionStore) before anything else happens
+        for (var i = 0; i < 100; i++)
+        {
+            Assert.That(await enumerator.MoveNextAsync(), Is.True);
+            received.Add(enumerator.Current);
+        }
+
+        // feed v002 on a separate connection while the stream above is still active. Awaiting this to
+        // completion guarantees EndFeed (and its Dispose of the v001 store) has already run server-side.
+        await feedingConnector.FeedCollection("persons", "v002", GenerateMarkedItems(1_000, marker: 2));
+
+        // feed v003 too: with MaxVersionsToKeep=2, this makes v001 a prune target while it's still leased by
+        // the stream - the directory deletion must fail quietly and not fail this feed
+        await feedingConnector.FeedCollection("persons", "v003", GenerateMarkedItems(1_000, marker: 3));
+
+        // keep consuming the rest of the original stream: it must still see a fully intact v001 snapshot,
+        // never a crash, never a mix of markers from the newer versions
+        while (await enumerator.MoveNextAsync())
+            received.Add(enumerator.Current);
+
+        Assert.That(received.Count, Is.EqualTo(itemCount));
+        Assert.That(received.All(i => i.Data[0] == 1), Is.True,
+            "The stream must see a consistent snapshot of v001 throughout, never data from v002/v003");
+
+        // and regular queries must now see v003, the current version
+        using var queryConnector = new Connector("localhost", _server!.Port);
+        queryConnector.Connect();
+
+        var queried = await queryConnector.QueryByPrimaryKey("persons", 0);
+        Assert.That(queried[0][0], Is.EqualTo(3));
+    }
+
     private static IEnumerable<Item> GenerateItems(int count)
     {
         for (var i = 0; i < count; i++)
@@ -134,5 +191,11 @@ public class StreamAllDataTest
             var size = i % 2 == 0 ? 50 : 150;
             yield return new Item(new byte[size], i);
         }
+    }
+
+    private static IEnumerable<Item> GenerateMarkedItems(int count, byte marker)
+    {
+        for (var i = 0; i < count; i++)
+            yield return new Item([marker], i);
     }
 }

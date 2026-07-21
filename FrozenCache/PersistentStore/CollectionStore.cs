@@ -66,6 +66,11 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 
     private readonly ILogger? _logger;
 
+    private readonly object _disposalLock = new();
+    private int _activeReaders;
+    private bool _disposeRequested;
+    private bool _disposed;
+
     /// <summary>
     ///     Create a new empty collection store at the specified path.Before data is fed in a new collection, the directory
     ///     will contain only metadata
@@ -138,13 +143,81 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     #region Implementation of IDisposable
 
     /// <summary>
-    ///     Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.
+    ///     Disposes the underlying memory-mapped files - unless a streaming enumeration is currently in
+    ///     progress via <see cref="AcquireStreamingReadLease" />, in which case disposal is deferred until
+    ///     that stream finishes. Point lookups (<see cref="GetByFirstKey" />) are not tracked here at all -
+    ///     they complete far too quickly for the superseding race this guards against to matter, and this
+    ///     store is only ever reachable after being superseded through a stream that captured a reference to
+    ///     it before the swap.
     /// </summary>
     public void Dispose()
     {
+        lock (_disposalLock)
+        {
+            if (_disposed)
+                return;
+
+            if (_activeReaders > 0)
+            {
+                _disposeRequested = true;
+                return;
+            }
+
+            DisposeCore();
+        }
+    }
+
+    private void DisposeCore()
+    {
+        _disposed = true;
+
         foreach (var view in _views) view.Dispose();
 
         foreach (var file in _files) file.Dispose();
+    }
+
+    /// <summary>
+    ///     Acquire before starting a streaming enumeration (<see cref="GetAllItems" />) and hold for its
+    ///     entire duration, however long that takes. Ensures this store's memory-mapped files aren't disposed
+    ///     out from under an in-progress stream if a newer version finishes feeding in the meantime. Not used
+    ///     by point lookups: deliberately lock-free, since those are on the hot path for many concurrent
+    ///     clients and complete far too quickly for this race to matter in practice.
+    /// </summary>
+    private IDisposable AcquireStreamingReadLease()
+    {
+        lock (_disposalLock)
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(CollectionStore),
+                    "This collection version has already been disposed");
+
+            _activeReaders++;
+        }
+
+        return new ReadLease(this);
+    }
+
+    private void ReleaseStreamingReadLease()
+    {
+        lock (_disposalLock)
+        {
+            _activeReaders--;
+
+            if (_activeReaders == 0 && _disposeRequested && !_disposed)
+                DisposeCore();
+        }
+    }
+
+    private sealed class ReadLease(CollectionStore store) : IDisposable
+    {
+        private bool _released;
+
+        public void Dispose()
+        {
+            if (_released) return;
+            _released = true;
+            store.ReleaseStreamingReadLease();
+        }
     }
 
     #endregion
@@ -386,12 +459,17 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 
     /// <summary>
     ///     Enumerates every document currently stored, in on-disk order, without going through the index.
-    ///     Used to stream a full copy of a collection to a client.
+    ///     Used to stream a full copy of a collection to a client. Holds a read lease for the entire
+    ///     enumeration (see <see cref="AcquireStreamingReadLease" />), however long that takes, so this
+    ///     version can't be disposed out from under an in-progress stream if a newer version finishes feeding
+    ///     in the meantime.
     /// </summary>
     public IEnumerable<Item> GetAllItems()
     {
         if (!_isReadOnly)
             throw new InvalidOperationException("Cannot query a collection store before it has been sealed (call EndOfFeed first)");
+
+        using var lease = AcquireStreamingReadLease();
 
         for (var fileIndex = 0; fileIndex < _views.Count; fileIndex++)
         {
