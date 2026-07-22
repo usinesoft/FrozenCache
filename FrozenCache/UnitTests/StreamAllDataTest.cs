@@ -77,6 +77,40 @@ public class StreamAllDataTest
         Assert.That(queryResult.Count, Is.EqualTo(1));
     }
 
+    /// <summary>
+    /// GetAllItems now walks the primary index instead of re-parsing segment file headers. The index stores
+    /// unique and duplicate primary keys in separate structures internally, so this specifically exercises
+    /// that both paths are covered by streaming.
+    /// </summary>
+    [Test]
+    public async Task StreamAllDataReturnsAllItemsForDuplicatePrimaryKeys()
+    {
+        _store.CreateCollection(new CollectionMetadata("persons", "id"));
+        _store.FeedCollection("persons", "v001", new[]
+        {
+            new Item(new byte[] { 1 }, 1),
+            new Item(new byte[] { 2 }, 2),
+            new Item(new byte[] { 3 }, 2), // duplicate key 2
+            new Item(new byte[] { 4 }, 2), // duplicate key 2
+            new Item(new byte[] { 5 }, 3)
+        });
+
+        using var connector = new Connector("localhost", _server!.Port);
+        connector.Connect();
+
+        var received = new List<Item>();
+        await foreach (var item in connector.StreamAllData("persons"))
+            received.Add(item);
+
+        Assert.That(received.Count, Is.EqualTo(5));
+
+        var byKey = received.GroupBy(i => i.Keys[0]).ToDictionary(g => g.Key, g => g.Select(i => i.Data[0]).OrderBy(b => b).ToList());
+
+        Assert.That(byKey[1], Is.EqualTo(new byte[] { 1 }));
+        Assert.That(byKey[2], Is.EqualTo(new byte[] { 2, 3, 4 }), "All three documents sharing key 2 should be streamed");
+        Assert.That(byKey[3], Is.EqualTo(new byte[] { 5 }));
+    }
+
     [Test]
     public async Task StreamAllDataOfAnEmptyCollectionYieldsNoItemsAndLeavesTheConnectionUsable()
     {

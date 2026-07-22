@@ -16,11 +16,16 @@ internal interface IIndex
     void PostProcess();
 
     /// <summary>
-    ///   Get the list of entries for the specified key. 
+    ///   Get the list of entries for the specified key.
     /// </summary>
     /// <param name="keyValue"></param>
     /// <returns></returns>
     List<IndexEntry> Get(long keyValue);
+
+    /// <summary>
+    ///   Enumerates every (key, entry) pair currently in the index, including duplicate keys.
+    /// </summary>
+    IEnumerable<KeyValuePair<long, IndexEntry>> GetAll();
 
     int ObjectCount { get; }
     int NonUniqueKeys { get; }

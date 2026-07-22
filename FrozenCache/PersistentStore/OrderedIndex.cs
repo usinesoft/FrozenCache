@@ -67,4 +67,10 @@ public sealed class OrderedIndex : IIndex
 
         return result;
     }
+
+    public IEnumerable<KeyValuePair<long, IndexEntry>> GetAll()
+    {
+        for (var i = 0; i < _keys.Length; i++)
+            yield return new KeyValuePair<long, IndexEntry>(_keys[i], _values[i]);
+    }
 }

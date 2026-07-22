@@ -1,5 +1,6 @@
 using CacheClient;
 using FrozenCache;
+using Messages;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -47,7 +48,7 @@ public class AggregatorLastVersionMapTest
     public void TheMapIsPopulatedAtConnectionWithoutWaitingForTheWatchdog()
     {
         _store.CreateCollection(new CollectionMetadata("persons", "id"));
-        _store.FeedCollection("persons", "v001", new[] { new Item(new byte[10], 1) });
+        _store.FeedCollection("persons", "v001", [new Item(new byte[10], 1)]);
 
         // a long watchdog interval: if the map only populated on the first tick, this assertion would fail
         var aggregator = new Aggregator(2, false, true, 60_000, ("localhost", _server!.Port));

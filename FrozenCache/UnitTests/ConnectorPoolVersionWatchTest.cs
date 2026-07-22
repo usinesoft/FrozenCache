@@ -1,5 +1,6 @@
 using CacheClient;
 using FrozenCache;
+using Messages;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -48,7 +49,7 @@ public class ConnectorPoolVersionWatchTest
     {
         // establish a baseline version before the pool starts watching
         _store.CreateCollection(new CollectionMetadata("persons", "id"));
-        _store.FeedCollection("persons", "v001", new[] { new Item(new byte[10], 1) });
+        _store.FeedCollection("persons", "v001", [new Item(new byte[10], 1)]);
 
         var events = new List<NewVersionEventArgs>();
 
@@ -77,7 +78,7 @@ public class ConnectorPoolVersionWatchTest
     public async Task WatchdogDoesNotRaiseNewVersionWhenNothingChanges()
     {
         _store.CreateCollection(new CollectionMetadata("persons", "id"));
-        _store.FeedCollection("persons", "v001", new[] { new Item(new byte[10], 1) });
+        _store.FeedCollection("persons", "v001", [new Item(new byte[10], 1)]);
 
         var events = new List<NewVersionEventArgs>();
 
@@ -95,8 +96,8 @@ public class ConnectorPoolVersionWatchTest
     {
         _store.CreateCollection(new CollectionMetadata("persons", "id"));
         _store.CreateCollection(new CollectionMetadata("invoices", "id"));
-        _store.FeedCollection("persons", "v001", new[] { new Item(new byte[10], 1) });
-        _store.FeedCollection("invoices", "v001", new[] { new Item(new byte[10], 1) });
+        _store.FeedCollection("persons", "v001", [new Item(new byte[10], 1)]);
+        _store.FeedCollection("invoices", "v001", [new Item(new byte[10], 1)]);
 
         var events = new List<NewVersionEventArgs>();
 
@@ -106,7 +107,7 @@ public class ConnectorPoolVersionWatchTest
         await Task.Delay(500); // establish baseline for both collections
 
         // only "invoices" gets a new version
-        _store.FeedCollection("invoices", "v002", new[] { new Item(new byte[10], 1) });
+        _store.FeedCollection("invoices", "v002", [new Item(new byte[10], 1)]);
 
         var deadline = DateTime.UtcNow.AddSeconds(5);
         while (DateTime.UtcNow < deadline && events.Count == 0)

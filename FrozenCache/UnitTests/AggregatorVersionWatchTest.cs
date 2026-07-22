@@ -1,6 +1,7 @@
 using System.Text;
 using CacheClient;
 using FrozenCache;
+using Messages;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -48,7 +49,7 @@ public class AggregatorVersionWatchTest
     public async Task NewVersionEventClearsLocalCacheAndIsPropagatedToClients()
     {
         _store.CreateCollection(new CollectionMetadata("persons", "id"));
-        _store.FeedCollection("persons", "v001", new[] { new Item(Encoding.UTF8.GetBytes("v1-data"), 1) });
+        _store.FeedCollection("persons", "v001", [new Item(Encoding.UTF8.GetBytes("v1-data"), 1)]);
 
         var aggregator = new Aggregator(2, false, true, 200, ("localhost", _server!.Port));
         aggregator.ConfigureLocalCache("persons", 1000);
@@ -69,7 +70,7 @@ public class AggregatorVersionWatchTest
         await Task.Delay(500); // let the watchdog establish its baseline version
 
         // feed a new version with different data for the same key
-        _store.FeedCollection("persons", "v002", new[] { new Item(Encoding.UTF8.GetBytes("v2-data"), 1) });
+        _store.FeedCollection("persons", "v002", [new Item(Encoding.UTF8.GetBytes("v2-data"), 1)]);
 
         var deadline = DateTime.UtcNow.AddSeconds(5);
         while (DateTime.UtcNow < deadline && events.Count == 0)
@@ -91,7 +92,7 @@ public class AggregatorVersionWatchTest
     public async Task NewVersionEventIsNotRaisedWhenNoLocalCacheIsConfigured()
     {
         _store.CreateCollection(new CollectionMetadata("persons", "id"));
-        _store.FeedCollection("persons", "v001", new[] { new Item(new byte[10], 1) });
+        _store.FeedCollection("persons", "v001", [new Item(new byte[10], 1)]);
 
         var aggregator = new Aggregator(2, false, true, 200, ("localhost", _server!.Port));
         // no ConfigureLocalCache call for "persons"
@@ -101,7 +102,7 @@ public class AggregatorVersionWatchTest
 
         await Task.Delay(500); // establish baseline
 
-        _store.FeedCollection("persons", "v002", new[] { new Item(new byte[10], 1) });
+        _store.FeedCollection("persons", "v002", [new Item(new byte[10], 1)]);
 
         var deadline = DateTime.UtcNow.AddSeconds(5);
         while (DateTime.UtcNow < deadline && events.Count == 0)

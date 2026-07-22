@@ -85,4 +85,14 @@ public sealed class DictionaryIndex : IIndex
 
         return result;
     }
+
+    public IEnumerable<KeyValuePair<long, IndexEntry>> GetAll()
+    {
+        foreach (var pair in _byMostDiscriminantKeyUnique)
+            yield return pair;
+
+        foreach (var (key, entries) in _byMostDiscriminantKey)
+            foreach (var entry in entries)
+                yield return new KeyValuePair<long, IndexEntry>(key, entry);
+    }
 }

@@ -12,7 +12,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Messages\Messages.csproj" />
-    <ProjectReference Include="..\PersistentStore\PersistentStore.csproj" />
   </ItemGroup>
 
 </Project>

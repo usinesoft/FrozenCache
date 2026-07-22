@@ -1,5 +1,6 @@
 ﻿using System.IO.MemoryMappedFiles;
 using System.Runtime.InteropServices;
+using Messages;
 using Microsoft.Extensions.Logging;
 
 namespace PersistentStore;
@@ -66,7 +67,7 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 
     private readonly ILogger? _logger;
 
-    private readonly object _disposalLock = new();
+    private readonly Lock _disposalLock = new();
     private int _activeReaders;
     private bool _disposeRequested;
     private bool _disposed;
@@ -80,6 +81,7 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     /// <param name="logger"></param>
     /// <param name="binaryFileDataSize"></param>
     /// <param name="maxDocumentsInEachFile"></param>
+    /// <param name="primaryIndexType">Dictionary or Ordered</param>
     public CollectionStore(string storagePath, int numberOfKeys, ILogger? logger,
         int binaryFileDataSize = Consts.DefaultBinaryFileDataSize,
         int maxDocumentsInEachFile = Consts.DefaultMaxDocumentsInOneFile, IndexType primaryIndexType = IndexType.Dictionary)
@@ -139,6 +141,23 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 
 
     internal string StoragePath { get; }
+
+    /// <summary>
+    ///     True while at least one client is actively streaming this store via <see cref="GetAllItems" />.
+    ///     Used by <see cref="DataStore.DropCollection" /> to fail fast and cleanly instead of calling
+    ///     <see cref="Dispose" /> (which would defer and silently finish itself off once that stream ends,
+    ///     even though the drop was never actually completed).
+    /// </summary>
+    internal bool IsBeingStreamed
+    {
+        get
+        {
+            lock (_disposalLock)
+            {
+                return _activeReaders > 0;
+            }
+        }
+    }
 
     #region Implementation of IDisposable
 
@@ -458,11 +477,13 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
-    ///     Enumerates every document currently stored, in on-disk order, without going through the index.
-    ///     Used to stream a full copy of a collection to a client. Holds a read lease for the entire
-    ///     enumeration (see <see cref="AcquireStreamingReadLease" />), however long that takes, so this
-    ///     version can't be disposed out from under an in-progress stream if a newer version finishes feeding
-    ///     in the meantime.
+    ///     Enumerates every document currently stored, via the primary index rather than by re-parsing segment
+    ///     file headers - the index already holds exactly what's needed (key, file, offset, length) once
+    ///     <see cref="CreateIndexes" /> has run, so there's no reason to read the same information twice from
+    ///     the mapped files. Used to stream a full copy of a collection to a client. Holds a read lease for
+    ///     the entire enumeration (see <see cref="AcquireStreamingReadLease" />), however long that takes, so
+    ///     this version can't be disposed out from under an in-progress stream if a newer version finishes
+    ///     feeding in the meantime.
     /// </summary>
     public IEnumerable<Item> GetAllItems()
     {
@@ -471,55 +492,8 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 
         using var lease = AcquireStreamingReadLease();
 
-        for (var fileIndex = 0; fileIndex < _views.Count; fileIndex++)
-        {
-            var view = _views[fileIndex];
-
-            foreach (var header in ReadFileHeaders(view))
-            {
-                var data = new byte[header.Length];
-                ReadBytes(header.OffsetInFile, header.Length, view, data);
-
-                yield return new Item(data, header.IndexKeys);
-            }
-        }
-    }
-
-    /// <summary>
-    ///     Reads every non-end-marker document header from a segment file. Split out from <see cref="GetAllItems" />
-    ///     because iterator methods cannot contain unsafe code.
-    /// </summary>
-    private unsafe List<PersistentObjectHeader> ReadFileHeaders(MemoryMappedViewAccessor view)
-    {
-        var headers = new List<PersistentObjectHeader>();
-        var buffer = new byte[_documentHeaderSize];
-        var ptr = (byte*)0;
-
-        try
-        {
-            view.SafeMemoryMappedViewHandle.AcquirePointer(ref ptr);
-
-            for (var i = 0; i < _maxDocuments; i++)
-            {
-                Marshal.Copy(new IntPtr(ptr), buffer, 0, _documentHeaderSize);
-
-                var header = new PersistentObjectHeader();
-                header.FromBytes(buffer);
-
-                if (header.IsEndMarker)
-                    break;
-
-                headers.Add(header);
-
-                ptr += _documentHeaderSize;
-            }
-        }
-        finally
-        {
-            view.SafeMemoryMappedViewHandle.ReleasePointer();
-        }
-
-        return headers;
+        foreach (var (key, entry) in _primaryIndex.GetAll())
+            yield return LoadDocument(key, entry);
     }
 }
 

@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics;
 using CacheClient;
-using PersistentStore;
+using Messages;
+
 #pragma warning disable S112
 
 namespace PerTest

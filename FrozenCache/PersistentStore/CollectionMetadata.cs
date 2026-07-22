@@ -36,7 +36,7 @@ public class CollectionMetadata
     /// <summary>
     /// Maximum number of items that can be stored in a single file. A collection is split into multiple files if it exceeds this limit.
     /// </summary>
-    public int MaxItemsInFile { get; set; } = 1_000_000;
+    public int MaxItemsInFile { get; set; } = 2_000_000;
 
     /// <summary>
     /// Maximum size of a file in bytes. If a collection exceeds this size, it will be split into multiple files.

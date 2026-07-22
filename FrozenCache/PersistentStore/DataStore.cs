@@ -49,6 +49,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
                 JsonSerializer.Deserialize<CollectionMetadata>(jsonMetadata,
                     AppJsonSerializerContext.Default.CollectionMetadata) ??
                 throw new CacheException("Failed to deserialize existing collection metadata");
+            
             if (!currentMetadata.IsCompatibleWith(metadata))
                 throw new CacheException(
                     $"Collection {metadata.Name} already exists with different schema.");
@@ -132,6 +133,8 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
 
             try
             {
+                // remove the completion marker first, so that it is removed at startup even if the next line fails
+                Directory.Delete(Path.Combine(completeVersionsDirectories[i], Consts.CompletedMarkerDirectoryName));
                 Directory.Delete(completeVersionsDirectories[i], true);
             }
             catch (Exception e)
@@ -150,18 +153,36 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
 
     public void DropCollection(string name)
     {
-        if (_collectionStores.TryGetValue(name, out var store))
-        {
-            store.Dispose();
-            _collectionStores.Remove(name);
-        }
-
-
         var path = Path.Combine(RootPath, name);
 
         if (!Directory.Exists(path)) throw new CacheException("Collection not found");
 
-        Directory.Delete(path, true);
+        // Fail fast, before touching anything, if a client is actively streaming this collection. Calling
+        // Dispose() anyway would "succeed" by deferring - but that silently finishes the job once the stream
+        // ends on its own, even though this drop was never actually completed. Checking first keeps a failed
+        // drop a true no-op: the collection stays fully intact and queryable until a retry actually succeeds.
+        if (_collectionStores.TryGetValue(name, out var store))
+        {
+            if (store.IsBeingStreamed)
+                throw new CacheException(
+                    $"Cannot drop collection '{name}': it is currently being streamed by a client. Please retry shortly.");
+
+            store.Dispose();
+        }
+
+        try
+        {
+            Directory.Delete(path, true);
+        }
+        catch (IOException)
+        {
+            // A stream may have started in the narrow window between the check above and this delete. Same
+            // deal: report it clearly rather than leaking a raw file-locked message.
+            throw new CacheException(
+                $"Cannot drop collection '{name}': its data is still in use, likely by a client that just started streaming it. Please retry shortly.");
+        }
+
+        _collectionStores.Remove(name);
 
         LoadCollectionsMetadata();
     }

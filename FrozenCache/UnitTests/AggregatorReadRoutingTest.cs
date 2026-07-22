@@ -1,6 +1,7 @@
 using System.Text;
 using CacheClient;
 using FrozenCache;
+using Messages;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -67,7 +68,7 @@ public class AggregatorReadRoutingTest
         foreach (var store in _stores)
         {
             store.CreateCollection(new CollectionMetadata("persons", "id"));
-            store.FeedCollection("persons", "v001", new[] { new Item(Encoding.UTF8.GetBytes("v001-data"), 1) });
+            store.FeedCollection("persons", "v001", [new Item(Encoding.UTF8.GetBytes("v001-data"), 1)]);
         }
 
         var servers = _servers.Select(s => ("localhost", s.Port)).ToArray();

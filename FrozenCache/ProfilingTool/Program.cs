@@ -2,6 +2,7 @@
 using PersistentStore;
 using System.Diagnostics;
 using FrozenCache;
+using Messages;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
