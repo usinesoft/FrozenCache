@@ -9,21 +9,29 @@ namespace Messages;
 public class FeedItemBatchSerializer : IBatchSerializer<FeedItem>
 {
     private readonly FeedItemSerializer _serializer = new();
+
+    /// <summary>Size of the (blockSize, count) header written before every batch's payload.</summary>
+    private const int HeaderSize = sizeof(int) + sizeof(int);
+
     public int Serialize(BinaryWriter writer, Span<FeedItem> items, int maxBatchSizeInBytes = 1_000_000)
     {
-        
 
         // an empty batch marks the end of the stream
         if (items.Length == 0)
         {
-            writer.Write(0);
-            writer.Write(0);
+            Span<byte> emptyHeader = stackalloc byte[HeaderSize];
+            BitConverter.TryWriteBytes(emptyHeader[..4], 0);
+            BitConverter.TryWriteBytes(emptyHeader[4..], 0);
+            writer.Write(emptyHeader);
             return 0;
         }
 
-        
-        byte[] buffer = ArrayPool<byte>.Shared.Rent(2 * maxBatchSizeInBytes);
-        MemoryStream memoryStream = new MemoryStream(buffer);
+        // The header is written into the same rented buffer, ahead of the payload, so the whole batch goes
+        // out as a single Write call instead of three. Over a plain socket that barely matters, but over
+        // SslStream each separate Write is its own TLS record (encrypt + MAC + send) - three calls per batch
+        // means paying that overhead three times, disproportionately so for the 8-byte header.
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(HeaderSize + 2 * maxBatchSizeInBytes);
+        MemoryStream memoryStream = new MemoryStream(buffer, HeaderSize, buffer.Length - HeaderSize);
 
         var memoryWriter = new BinaryWriter(memoryStream, Encoding.UTF8, true);
 
@@ -36,21 +44,21 @@ public class FeedItemBatchSerializer : IBatchSerializer<FeedItem>
 
             if (memoryStream.Position > maxBatchSizeInBytes)
                 break;
-                
+
         }
 
         var blockSize = (int)memoryStream.Position;
-        writer.Write(blockSize);
-        writer.Write(count);
 
-        writer.Write(buffer, 0, blockSize);
+        BitConverter.TryWriteBytes(buffer.AsSpan(0, 4), blockSize);
+        BitConverter.TryWriteBytes(buffer.AsSpan(4, 4), count);
 
+        writer.Write(buffer, 0, HeaderSize + blockSize);
 
         ArrayPool<byte>.Shared.Return(buffer);
 
         int batches = 1;
 
-        
+
         if (count < items.Length)
         {
             // Recursive call is used to handle large batches that exceed the maxBatchSizeInBytes
