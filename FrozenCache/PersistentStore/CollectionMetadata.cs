@@ -50,6 +50,17 @@ public class CollectionMetadata
 
 
     /// <summary>
+    /// The position of a named index within <see cref="Indexes"/> (0 = primary, 1.. = secondary, in
+    /// declaration order) - this is the same position documents' keys are stored at in <c>Item.Keys</c>.
+    /// Null if no index with this name is declared for the collection.
+    /// </summary>
+    public int? GetIndexPosition(string indexName)
+    {
+        var position = Indexes.FindIndex(i => i.Name == indexName);
+        return position >= 0 ? position : null;
+    }
+
+    /// <summary>
     /// Check if two metadata objects are compatible. Used when creating a collection that already exists.If compatible, the existing collection will be used.
     /// </summary>
     /// <param name="other"></param>

@@ -12,5 +12,6 @@ public enum MessageType
     DropCollectionRequest = 9,
     GetCollectionsDescriptionRequest = 10,
     CollectionsDescription = 11,
-    StreamAllDataRequest = 12
+    StreamAllDataRequest = 12,
+    StreamBySecondaryIndexRequest = 13
 }

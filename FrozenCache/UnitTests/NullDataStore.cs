@@ -58,6 +58,11 @@ public class NullDataStore : IDataStore
         throw new NotImplementedException();
     }
 
+    public IEnumerable<Item> StreamBySecondaryIndex(string collectionName, string indexName, long keyValue)
+    {
+        throw new NotImplementedException();
+    }
+
     public int FeedCollection(string collectionName, string newVersion, IEnumerable<Item> items)
     {
         var watch = Stopwatch.StartNew();

@@ -269,6 +269,16 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         return _collectionStores[collectionName].GetAllItems();
     }
 
+    public IEnumerable<Item> StreamBySecondaryIndex(string collectionName, string indexName, long keyValue)
+    {
+        var metadata = _metadataByCollection[collectionName];
+
+        var position = metadata.GetIndexPosition(indexName) ??
+                        throw new CacheException($"Collection {collectionName} has no index named {indexName}");
+
+        return _collectionStores[collectionName].GetBySecondaryIndex(position, keyValue);
+    }
+
     private CollectionStore BeginFeed(string collectionName, string newVersion)
     {
         if (!_opened)

@@ -165,6 +165,9 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
                     case StreamAllDataRequest streamAllDataRequest:
                         await ProcessStreamAllData(streamAllDataRequest, stream, cancellationToken);
                         break;
+                    case StreamBySecondaryIndexRequest streamBySecondaryIndexRequest:
+                        await ProcessStreamBySecondaryIndex(streamBySecondaryIndexRequest, stream, cancellationToken);
+                        break;
                     default:
                         Logger.LogWarning("Unknown message type received: {Type}", message.GetType().Name);
                         await stream.WriteMessageAsync(new StatusResponse
@@ -363,6 +366,87 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         catch (Exception e)
         {
             Logger.LogError(e, "Error while streaming collection {Collection}: {Message}", collectionName, e.Message);
+        }
+        finally
+        {
+            ArrayPool<FeedItem>.Shared.Return(batch);
+        }
+    }
+
+    /// <summary>
+    /// Streams every document in a collection's active version whose value at a named index equals a given
+    /// key, using the same manual big-batch framing as <see cref="ProcessStreamAllData"/>. The index name is
+    /// resolved (and validated) up front, before the acknowledgement, for the same reason collection
+    /// existence is: once the ack is sent, the client's reader is committed to batch framing and a failure
+    /// can no longer be reported as a StatusResponse.
+    /// </summary>
+    private async Task ProcessStreamBySecondaryIndex(StreamBySecondaryIndexRequest request, Stream stream, CancellationToken ct)
+    {
+        var collectionName = request.CollectionName;
+
+        try
+        {
+            if (IsNullOrWhiteSpace(collectionName))
+                throw new CacheException("Collection name is required");
+
+            if (IsNullOrWhiteSpace(request.IndexName))
+                throw new CacheException("Index name is required");
+
+            var metadata = Store.GetCollectionMetadata(collectionName);
+            if (metadata == null)
+                throw new CacheException($"Collection {collectionName} does not exist");
+
+            if (metadata.LastVersion == null)
+                throw new CacheException($"Collection {collectionName} has no data to stream");
+
+            if (metadata.GetIndexPosition(request.IndexName) == null)
+                throw new CacheException($"Collection {collectionName} has no index named {request.IndexName}");
+        }
+        catch (Exception e)
+        {
+            Logger.LogError("Error while starting to stream collection {Collection} by index {Index}: {Message}",
+                collectionName, request.IndexName, e.Message);
+            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = e.Message }, ct);
+            return;
+        }
+
+        await stream.WriteMessageAsync(new StatusResponse(), ct);
+
+        Logger.LogInformation("Streaming collection {Collection} by index {Index}={Key}",
+            collectionName, request.IndexName, request.KeyValue);
+
+        var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+
+        const int maxBatchSize = 1_000_000; // 1 MB per batch
+        const int maxMessagesPerBatch = 5_000; // 5_000 items per batch
+
+        var batch = ArrayPool<FeedItem>.Shared.Rent(maxMessagesPerBatch);
+        try
+        {
+            var batchSize = 0;
+
+            foreach (var item in Store.StreamBySecondaryIndex(collectionName, request.IndexName, request.KeyValue))
+            {
+                batch[batchSize++] = new FeedItem { Data = item.Data, Keys = item.Keys };
+
+                if (batchSize >= maxMessagesPerBatch)
+                {
+                    _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize), maxBatchSize);
+                    batchSize = 0;
+                }
+            }
+
+            _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize));
+
+            if (batchSize != 0) // if the last one was not empty, write an empty batch as the end marker
+                _batchSerializer.Serialize(writer, Array.Empty<FeedItem>());
+
+            Logger.LogInformation("Finished streaming collection {Collection} by index {Index}", collectionName, request.IndexName);
+        }
+        catch (Exception e)
+        {
+            Logger.LogError(e, "Error while streaming collection {Collection} by index {Index}: {Message}",
+                collectionName, request.IndexName, e.Message);
         }
         finally
         {

@@ -48,6 +48,16 @@ public interface IDataStore
     public IEnumerable<Item> StreamAllData(string collectionName);
 
     /// <summary>
+    /// Enumerates every document in a collection's active version whose value at the named index equals
+    /// <paramref name="keyValue"/>. Works for any declared index (primary or secondary), though it exists
+    /// mainly for secondary indexes - <see cref="GetByPrimaryKey"/> already covers fast primary-key lookups.
+    /// </summary>
+    /// <param name="collectionName">name of an existing, already fed collection</param>
+    /// <param name="indexName">name of a declared index (primary or secondary) on the collection</param>
+    /// <param name="keyValue"></param>
+    public IEnumerable<Item> StreamBySecondaryIndex(string collectionName, string indexName, long keyValue);
+
+    /// <summary>
     /// Create a new version of a collection and index it in memory.
     /// The collection must already exist. This new version will be available when iteration ends;
     /// </summary>

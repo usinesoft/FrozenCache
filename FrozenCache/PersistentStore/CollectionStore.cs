@@ -65,6 +65,14 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 
     private readonly IIndex _primaryIndex;
 
+    /// <summary>
+    ///     One index per secondary key, in declaration order (i.e. <see cref="_secondaryIndexes" />[0] indexes
+    ///     <c>Item.Keys[1]</c>, [1] indexes <c>Keys[2]</c>, and so on). Always <see cref="OrderedIndex" />,
+    ///     regardless of <see cref="IndexType" /> chosen for the primary index - secondary indexes are built for
+    ///     every document fed, so keeping their memory footprint low matters more than lookup speed here.
+    /// </summary>
+    private readonly IIndex[] _secondaryIndexes;
+
     private readonly ILogger? _logger;
 
     private readonly Lock _disposalLock = new();
@@ -132,6 +140,10 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
             IndexType.Ordered => new OrderedIndex(),
             _ => throw new ArgumentOutOfRangeException(nameof(primaryIndexType), primaryIndexType, null)
         };
+
+        _secondaryIndexes = new IIndex[Math.Max(0, _numberOfKeys - 1)];
+        for (var i = 0; i < _secondaryIndexes.Length; i++)
+            _secondaryIndexes[i] = new OrderedIndex();
 
         if (_views.Count == 0)
             CreateNewFile(1);
@@ -308,17 +320,45 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     }
 
 
-    private Item LoadDocument(long primaryKey, IndexEntry entry)
+    /// <summary>
+    ///     Loads a document's bytes and reconstructs its full, original-order key array from an entry found
+    ///     via the index at <paramref name="keyPosition" /> (0 = primary, 1.. = secondary, in declaration
+    ///     order). <see cref="IndexEntry.OtherKeys" /> holds every key except the one at that position, in
+    ///     their original relative order, so <paramref name="keyValue" /> is inserted back at that exact spot
+    ///     - the result is the same <c>Item.Keys</c> array regardless of which index found the document.
+    /// </summary>
+    private Item LoadDocument(int keyPosition, long keyValue, IndexEntry entry)
     {
         var view = _views[entry.FileIndex];
-
 
         var data = new byte[entry.Length];
 
         ReadBytes(entry.OffsetInFile, entry.Length, view, data);
 
-        return new Item(data, [primaryKey, ..entry.OtherKeys]);
+        return new Item(data, InsertAt(entry.OtherKeys, keyPosition, keyValue));
     }
+
+    /// <summary>Returns a copy of <paramref name="keys" /> with the element at <paramref name="position" /> removed.</summary>
+    private static long[] RemoveAt(long[] keys, int position)
+    {
+        var result = new long[keys.Length - 1];
+        Array.Copy(keys, 0, result, 0, position);
+        Array.Copy(keys, position + 1, result, position, keys.Length - position - 1);
+        return result;
+    }
+
+    /// <summary>Returns a copy of <paramref name="otherKeys" /> with <paramref name="value" /> inserted at <paramref name="position" />.</summary>
+    private static long[] InsertAt(long[] otherKeys, int position, long value)
+    {
+        var result = new long[otherKeys.Length + 1];
+        Array.Copy(otherKeys, 0, result, 0, position);
+        result[position] = value;
+        Array.Copy(otherKeys, position, result, position + 1, otherKeys.Length - position);
+        return result;
+    }
+
+    /// <summary>The index for a given key position: 0 is the primary index, 1.. are secondary indexes.</summary>
+    private IIndex GetIndex(int position) => position == 0 ? _primaryIndex : _secondaryIndexes[position - 1];
 
 
     private void CreateNewFile(int index)
@@ -395,20 +435,23 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 
     private void IndexHeader(int fileIndex, PersistentObjectHeader header)
     {
-        // For now duplicated keys will be found both in the unique and non-unique collections
-        // At the end the duplicate keys will be removed from the unique collection
-
-        var key = header.IndexKeys[0];
-
-        var newEntry = new IndexEntry
+        // Every key (primary and secondary) gets its own entry in its own index. For now duplicated keys
+        // will be found both in the unique and non-unique collections of a DictionaryIndex; at the end the
+        // duplicate keys will be removed from the unique collection.
+        for (var position = 0; position < header.IndexKeys.Length; position++)
         {
-            OtherKeys = header.IndexKeys[1..],
-            FileIndex = fileIndex,
-            OffsetInFile = header.OffsetInFile,
-            Length = header.Length
-        };
+            var key = header.IndexKeys[position];
 
-        _primaryIndex.Add(key, newEntry);
+            var newEntry = new IndexEntry
+            {
+                OtherKeys = RemoveAt(header.IndexKeys, position),
+                FileIndex = fileIndex,
+                OffsetInFile = header.OffsetInFile,
+                Length = header.Length
+            };
+
+            GetIndex(position).Add(key, newEntry);
+        }
     }
 
 
@@ -437,6 +480,8 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 
         _primaryIndex.PostProcess();
 
+        foreach (var secondaryIndex in _secondaryIndexes)
+            secondaryIndex.PostProcess();
 
         _logger?.LogInformation("Done post-processing index");
 
@@ -468,12 +513,34 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 
         foreach (var indexEntry in entries)
         {
-            var value = LoadDocument(keyValue, indexEntry);
+            var value = LoadDocument(0, keyValue, indexEntry);
             result.Add(value);
         }
 
 
         return result;
+    }
+
+    /// <summary>
+    ///     Enumerates every document whose value at the given key position (0 = primary, 1.. = secondary
+    ///     indexes, in declaration order) equals <paramref name="keyValue" />. Holds a read lease for the
+    ///     entire enumeration (see <see cref="AcquireStreamingReadLease" />), exactly like <see cref="GetAllItems" />,
+    ///     since a secondary key match can return an unbounded number of documents to stream back.
+    /// </summary>
+    public IEnumerable<Item> GetBySecondaryIndex(int keyPosition, long keyValue)
+    {
+        if (!_isReadOnly)
+            throw new InvalidOperationException("Cannot query a collection store before it has been sealed (call EndOfFeed first)");
+
+        if (keyPosition < 0 || keyPosition >= 1 + _secondaryIndexes.Length)
+            throw new ArgumentOutOfRangeException(nameof(keyPosition));
+
+        using var lease = AcquireStreamingReadLease();
+
+        var index = GetIndex(keyPosition);
+
+        foreach (var entry in index.Get(keyValue))
+            yield return LoadDocument(keyPosition, keyValue, entry);
     }
 
     /// <summary>
@@ -493,7 +560,7 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
         using var lease = AcquireStreamingReadLease();
 
         foreach (var (key, entry) in _primaryIndex.GetAll())
-            yield return LoadDocument(key, entry);
+            yield return LoadDocument(0, key, entry);
     }
 }
 
