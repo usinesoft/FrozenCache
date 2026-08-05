@@ -28,17 +28,17 @@ public class NullDataStore : IDataStore
         throw new NotImplementedException();
     }
 
-    public List<Item> GetByPrimaryKey(string collectionName, long keyValue)
+    public List<byte[]> GetByPrimaryKey(string collectionName, long keyValue)
     {
         throw new NotImplementedException();
     }
 
-    public IEnumerable<Item> StreamAllData(string collectionName)
+    public IEnumerable<(long PrimaryKey, byte[] Data)> StreamAllData(string collectionName)
     {
         throw new NotImplementedException();
     }
 
-    public IEnumerable<Item> StreamBySecondaryIndex(string collectionName, string indexName, long keyValue)
+    public IEnumerable<(long PrimaryKey, byte[] Data)> StreamBySecondaryIndex(string collectionName, string indexName, long keyValue)
     {
         throw new NotImplementedException();
     }

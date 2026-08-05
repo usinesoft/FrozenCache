@@ -1,5 +1,4 @@
 ﻿using CacheClient;
-using PersistentStore;
 using System.Diagnostics;
 using FrozenCache;
 using Messages;

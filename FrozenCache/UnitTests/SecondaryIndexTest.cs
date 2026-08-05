@@ -7,8 +7,10 @@ namespace UnitTests;
 /// <summary>
 /// Verifies secondary indexes at the storage layer: every declared index (not just the primary) is built
 /// during a feed, queryable via DataStore.StreamBySecondaryIndex, correctly rebuilt when a store is reopened,
-/// and reconstructs each document's full, original-order key array regardless of which index found it.
-/// All tests use the same 3-index schema (id, customerId, status) for consistency.
+/// and every match is paired with its primary key regardless of which index found it. All tests use the same
+/// 3-index schema (id, customerId, status) for consistency. Non-primary key values are not returned by reads -
+/// callers are expected to already have that information (they either searched by it, or it's embedded in the
+/// serialized data itself).
 /// </summary>
 public class SecondaryIndexTest
 {
@@ -32,7 +34,7 @@ public class SecondaryIndexTest
         new(new[] { marker }, id, customerId, status);
 
     [Test]
-    public void StreamBySecondaryIndexReturnsMatchingDocumentsWithOriginalKeyOrder()
+    public void StreamBySecondaryIndexReturnsMatchingDocumentsPairedWithPrimaryKey()
     {
         using var store = new DataStore(StoreName, IndexType.Dictionary);
         store.Open();
@@ -48,24 +50,13 @@ public class SecondaryIndexTest
         });
 
         var byCustomer = store.StreamBySecondaryIndex("orders", "customerId", 100).ToList();
-        Assert.That(byCustomer.Select(i => i.Keys[0]).OrderBy(k => k), Is.EqualTo(new long[] { 1, 2, 4 }));
-
-        foreach (var item in byCustomer)
-        {
-            // Keys must always be [id, customerId, status], regardless of which index found the document
-            Assert.That(item.Keys.Length, Is.EqualTo(3));
-            Assert.That(item.Keys[1], Is.EqualTo(100));
-        }
+        Assert.That(byCustomer.Select(i => i.PrimaryKey).OrderBy(k => k), Is.EqualTo(new long[] { 1, 2, 4 }));
 
         var byStatus = store.StreamBySecondaryIndex("orders", "status", 1).ToList();
-        Assert.That(byStatus.Select(i => i.Keys[0]).OrderBy(k => k), Is.EqualTo(new long[] { 1, 3, 4 }));
+        Assert.That(byStatus.Select(i => i.PrimaryKey).OrderBy(k => k), Is.EqualTo(new long[] { 1, 3, 4 }));
 
-        foreach (var item in byStatus)
-            Assert.That(item.Keys[2], Is.EqualTo(1));
-
-        // spot check full key + data reconstruction for one specific document found via a secondary index
-        var order3 = byStatus.Single(i => i.Keys[0] == 3);
-        Assert.That(order3.Keys, Is.EqualTo(new long[] { 3, 200, 1 }));
+        // spot check full data for one specific document found via a secondary index
+        var order3 = byStatus.Single(i => i.PrimaryKey == 3);
         Assert.That(order3.Data, Is.EqualTo(new byte[] { 33 }));
     }
 
@@ -105,7 +96,8 @@ public class SecondaryIndexTest
 
         var result = store.StreamBySecondaryIndex("orders", "id", 2).ToList();
         Assert.That(result.Count, Is.EqualTo(1));
-        Assert.That(result[0].Keys, Is.EqualTo(new long[] { 2, 200, 1 }));
+        Assert.That(result[0].PrimaryKey, Is.EqualTo(2));
+        Assert.That(result[0].Data, Is.EqualTo(new byte[] { 22 }));
     }
 
     [Test]
@@ -119,8 +111,7 @@ public class SecondaryIndexTest
 
         var result = store.GetByPrimaryKey("orders", 2);
         Assert.That(result.Count, Is.EqualTo(1));
-        Assert.That(result[0].Keys, Is.EqualTo(new long[] { 2, 100, 2 }));
-        Assert.That(result[0].Data, Is.EqualTo(new byte[] { 22 }));
+        Assert.That(result[0], Is.EqualTo(new byte[] { 22 }));
     }
 
     [Test]
@@ -143,14 +134,14 @@ public class SecondaryIndexTest
         reopened.Open();
 
         var byCustomer = reopened.StreamBySecondaryIndex("orders", "customerId", 100).ToList();
-        Assert.That(byCustomer.Select(i => i.Keys[0]).OrderBy(k => k), Is.EqualTo(new long[] { 1, 2 }));
+        Assert.That(byCustomer.Select(i => i.PrimaryKey).OrderBy(k => k), Is.EqualTo(new long[] { 1, 2 }));
 
         var byStatus = reopened.StreamBySecondaryIndex("orders", "status", 1).ToList();
-        Assert.That(byStatus.Select(i => i.Keys[0]).OrderBy(k => k), Is.EqualTo(new long[] { 1, 3 }));
+        Assert.That(byStatus.Select(i => i.PrimaryKey).OrderBy(k => k), Is.EqualTo(new long[] { 1, 3 }));
 
         // and the primary index must still be intact too
         var primary = reopened.GetByPrimaryKey("orders", 3);
-        Assert.That(primary.Single().Keys, Is.EqualTo(new long[] { 3, 200, 1 }));
+        Assert.That(primary.Single(), Is.EqualTo(new byte[] { 33 }));
     }
 
     [Test]
@@ -167,6 +158,6 @@ public class SecondaryIndexTest
 
         var result = store.StreamBySecondaryIndex("orders", "customerId", 42).ToList();
         Assert.That(result.Count, Is.EqualTo(itemCount));
-        Assert.That(result.Select(i => i.Keys[0]).OrderBy(k => k), Is.EqualTo(Enumerable.Range(0, itemCount).Select(i => (long)i)));
+        Assert.That(result.Select(i => i.PrimaryKey).OrderBy(k => k), Is.EqualTo(Enumerable.Range(0, itemCount).Select(i => (long)i)));
     }
 }

@@ -282,11 +282,7 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
             var temp = new List<byte[]>();
 
             foreach (var keyValue in queryRequest.PrimaryKeyValues)
-            {
-                var items = Store.GetByPrimaryKey(queryRequest.CollectionName, keyValue);
-
-                foreach (var item in items) temp.Add(item.Data);
-            }
+                temp.AddRange(Store.GetByPrimaryKey(queryRequest.CollectionName, keyValue));
 
             result.ObjectsData = temp.ToArray();
 
@@ -345,9 +341,9 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         {
             var batchSize = 0;
 
-            foreach (var item in Store.StreamAllData(collectionName))
+            foreach (var (primaryKey, data) in Store.StreamAllData(collectionName))
             {
-                batch[batchSize++] = new FeedItem { Data = item.Data, Keys = item.Keys };
+                batch[batchSize++] = new FeedItem { Data = data, Keys = [primaryKey] };
 
                 if (batchSize >= maxMessagesPerBatch)
                 {
@@ -425,9 +421,9 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         {
             var batchSize = 0;
 
-            foreach (var item in Store.StreamBySecondaryIndex(collectionName, request.IndexName, request.KeyValue))
+            foreach (var (primaryKey, data) in Store.StreamBySecondaryIndex(collectionName, request.IndexName, request.KeyValue))
             {
-                batch[batchSize++] = new FeedItem { Data = item.Data, Keys = item.Keys };
+                batch[batchSize++] = new FeedItem { Data = data, Keys = [primaryKey] };
 
                 if (batchSize >= maxMessagesPerBatch)
                 {

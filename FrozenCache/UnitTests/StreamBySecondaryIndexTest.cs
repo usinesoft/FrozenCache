@@ -63,13 +63,12 @@ public class StreamBySecondaryIndexTest
         using var connector = new Connector("localhost", _server!.Port);
         connector.Connect();
 
-        var received = new List<Item>();
+        var received = new List<(long PrimaryKey, byte[] Data)>();
         await foreach (var item in connector.StreamBySecondaryIndex("orders", "customerId", 42))
             received.Add(item);
 
         Assert.That(received.Count, Is.EqualTo(matchingCount));
-        Assert.That(received.All(i => i.Keys[1] == 42), Is.True);
-        Assert.That(received.Select(i => i.Keys[0]).OrderBy(k => k),
+        Assert.That(received.Select(i => i.PrimaryKey).OrderBy(k => k),
             Is.EqualTo(Enumerable.Range(0, matchingCount).Select(i => (long)i)));
 
         // the connection must still be perfectly usable afterward
@@ -89,7 +88,7 @@ public class StreamBySecondaryIndexTest
         using var connector = new Connector("localhost", _server!.Port);
         connector.Connect();
 
-        var received = new List<Item>();
+        var received = new List<(long PrimaryKey, byte[] Data)>();
         await foreach (var item in connector.StreamBySecondaryIndex("orders", "customerId", 999))
             received.Add(item);
 

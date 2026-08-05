@@ -34,28 +34,32 @@ public interface IDataStore
     public void Open(ILogger? logger = null);
 
     /// <summary>
-    /// Retrieves an object in a collection by primary key
+    /// Retrieves an object's raw data in a collection by primary key. The caller already knows the key it
+    /// queried by, so only the data is returned.
     /// </summary>
     /// <param name="collectionName"></param>
     /// <param name="keyValue"></param>
     /// <returns></returns>
-    public List<Item> GetByPrimaryKey(string collectionName, long keyValue);
+    public List<byte[]> GetByPrimaryKey(string collectionName, long keyValue);
 
     /// <summary>
-    /// Enumerates every document currently in a collection's active version, in on-disk order.
+    /// Enumerates every document currently in a collection's active version, in on-disk order, each paired
+    /// with its primary key. Any other key information a caller needs is expected to already be present in
+    /// the serialized data itself.
     /// </summary>
     /// <param name="collectionName">name of an existing, already fed collection</param>
-    public IEnumerable<Item> StreamAllData(string collectionName);
+    public IEnumerable<(long PrimaryKey, byte[] Data)> StreamAllData(string collectionName);
 
     /// <summary>
     /// Enumerates every document in a collection's active version whose value at the named index equals
-    /// <paramref name="keyValue"/>. Works for any declared index (primary or secondary), though it exists
-    /// mainly for secondary indexes - <see cref="GetByPrimaryKey"/> already covers fast primary-key lookups.
+    /// <paramref name="keyValue"/>, each paired with its primary key. Works for any declared index (primary
+    /// or secondary), though it exists mainly for secondary indexes - <see cref="GetByPrimaryKey"/> already
+    /// covers fast primary-key lookups.
     /// </summary>
     /// <param name="collectionName">name of an existing, already fed collection</param>
     /// <param name="indexName">name of a declared index (primary or secondary) on the collection</param>
     /// <param name="keyValue"></param>
-    public IEnumerable<Item> StreamBySecondaryIndex(string collectionName, string indexName, long keyValue);
+    public IEnumerable<(long PrimaryKey, byte[] Data)> StreamBySecondaryIndex(string collectionName, string indexName, long keyValue);
 
     /// <summary>
     /// Create a new version of a collection and index it in memory.

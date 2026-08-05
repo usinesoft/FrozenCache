@@ -322,12 +322,13 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
     }
 
     /// <summary>
-    ///     Streams every document currently in a collection's active version. Uses the same manual big-batch
-    ///     framing as a feed session, in reverse: the server acknowledges the request, then streams batches
-    ///     terminated by an empty one.
+    ///     Streams every document currently in a collection's active version, paired with its primary key.
+    ///     Uses the same manual big-batch framing as a feed session, in reverse: the server acknowledges the
+    ///     request, then streams batches terminated by an empty one. Any other key information the caller
+    ///     needs is expected to already be present in the serialized data itself.
     /// </summary>
     /// <param name="collection">name of an existing, already fed collection</param>
-    public async IAsyncEnumerable<Item> StreamAllData(string collection)
+    public async IAsyncEnumerable<(long PrimaryKey, byte[] Data)> StreamAllData(string collection)
     {
         if (_client == null || _stream == null) throw new InvalidOperationException("Not connected to server");
 
@@ -350,19 +351,21 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
                 yield break; // end of stream
 
             foreach (var feedItem in batch)
-                yield return new Item(feedItem.Data, feedItem.Keys);
+                yield return (feedItem.Keys[0], feedItem.Data);
         }
     }
 
     /// <summary>
     ///     Streams every document in a collection's active version whose value at a named secondary index
-    ///     equals <paramref name="keyValue"/>. Same framing as <see cref="StreamAllData"/>: the server
-    ///     acknowledges the request, then streams batches terminated by an empty one.
+    ///     equals <paramref name="keyValue"/>, paired with its primary key. Same framing as
+    ///     <see cref="StreamAllData"/>: the server acknowledges the request, then streams batches terminated
+    ///     by an empty one. Any other key information the caller needs is expected to already be present in
+    ///     the serialized data itself.
     /// </summary>
     /// <param name="collection">name of an existing, already fed collection</param>
     /// <param name="indexName">name of a declared index (primary or secondary) on the collection</param>
     /// <param name="keyValue"></param>
-    public async IAsyncEnumerable<Item> StreamBySecondaryIndex(string collection, string indexName, long keyValue)
+    public async IAsyncEnumerable<(long PrimaryKey, byte[] Data)> StreamBySecondaryIndex(string collection, string indexName, long keyValue)
     {
         if (_client == null || _stream == null) throw new InvalidOperationException("Not connected to server");
 
@@ -390,7 +393,7 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
                 yield break; // end of stream
 
             foreach (var feedItem in batch)
-                yield return new Item(feedItem.Data, feedItem.Keys);
+                yield return (feedItem.Keys[0], feedItem.Data);
         }
     }
 

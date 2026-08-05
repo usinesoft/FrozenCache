@@ -172,21 +172,18 @@ public class PersistentStoreTest
             var item1001 = store.GetByPrimaryKey("persons", 1001).FirstOrDefault();
 
             Assert.That(item0, Is.Not.Null, "Item with id 0 should exist");
-            Assert.That(item0!.Keys[0], Is.EqualTo(0));
-            Assert.That(item0.Data.Length, Is.EqualTo(1000), "Item with id 1000 should have data length of 1000");
+            Assert.That(item0!.Length, Is.EqualTo(1000), "Item with id 1000 should have data length of 1000");
 
             Assert.That(item1000, Is.Not.Null, "Item with id 1000 should exist");
-            Assert.That(item1000!.Data.Length, Is.EqualTo(1000), "Item with id 1000 should have data length of 1000");
+            Assert.That(item1000!.Length, Is.EqualTo(1000), "Item with id 1000 should have data length of 1000");
 
             Assert.That(item1001, Is.Not.Null, "Item with id 1001 should exist");
-            Assert.That(item1001!.Keys[0], Is.EqualTo(1001));
-            Assert.That(item1001.Data.Length, Is.EqualTo(100), "Item with id 1000 should have data length of 1000");
+            Assert.That(item1001!.Length, Is.EqualTo(100), "Item with id 1000 should have data length of 1000");
 
 
             // check for items in the second segment
             var itemOther = store.GetByPrimaryKey("persons", 1_000_003).FirstOrDefault();
             Assert.That(itemOther, Is.Not.Null, "Item with id 1_000_003 should exist");
-            Assert.That(itemOther!.Keys[0], Is.EqualTo(1_000_003));
 
 
             Benchmark(() =>
@@ -228,16 +225,12 @@ public class PersistentStoreTest
 
             var item1 = store.GetByPrimaryKey("first", 10).FirstOrDefault();
             Assert.That(item1, Is.Not.Null);
-            Assert.That(item1!.Keys.Length, Is.EqualTo(2));
-            Assert.That(item1.Keys[0], Is.EqualTo(10));
-            var content = Encoding.UTF8.GetString(item1.Data);
+            var content = Encoding.UTF8.GetString(item1!);
             Assert.That(content, Is.EqualTo("first"));
 
             var item2 = store.GetByPrimaryKey("second", 101).FirstOrDefault();
             Assert.That(item2, Is.Not.Null);
-            Assert.That(item2!.Keys.Length, Is.EqualTo(2));
-            Assert.That(item2.Keys[0], Is.EqualTo(101));
-            content = Encoding.UTF8.GetString(item2.Data);
+            content = Encoding.UTF8.GetString(item2!);
             Assert.That(content, Is.EqualTo("second"));
         }
 
@@ -248,16 +241,12 @@ public class PersistentStoreTest
 
             var item1 = store.GetByPrimaryKey("first", 10).FirstOrDefault();
             Assert.That(item1, Is.Not.Null);
-            Assert.That(item1!.Keys.Length, Is.EqualTo(2));
-            Assert.That(item1.Keys[0], Is.EqualTo(10));
-            var content = Encoding.UTF8.GetString(item1.Data);
+            var content = Encoding.UTF8.GetString(item1!);
             Assert.That(content, Is.EqualTo("first"));
 
             var item2 = store.GetByPrimaryKey("second", 101).FirstOrDefault();
             Assert.That(item2, Is.Not.Null);
-            Assert.That(item2!.Keys.Length, Is.EqualTo(2));
-            Assert.That(item2.Keys[0], Is.EqualTo(101));
-            content = Encoding.UTF8.GetString(item2.Data);
+            content = Encoding.UTF8.GetString(item2!);
             Assert.That(content, Is.EqualTo("second"));
         }
     }

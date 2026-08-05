@@ -55,13 +55,13 @@ public class StreamAllDataTest
         using var connector = new Connector("localhost", _server!.Port);
         connector.Connect();
 
-        var received = new List<Item>();
+        var received = new List<(long PrimaryKey, byte[] Data)>();
         await foreach (var item in connector.StreamAllData("persons"))
             received.Add(item);
 
         Assert.That(received.Count, Is.EqualTo(itemCount));
 
-        var byKey = received.ToDictionary(i => i.Keys[0]);
+        var byKey = received.ToDictionary(i => i.PrimaryKey);
         for (var i = 0; i < itemCount; i += 997) // sample across the whole range, including batch boundaries
         {
             Assert.That(byKey.ContainsKey(i), Is.True, $"Missing item with key {i}");
@@ -98,13 +98,13 @@ public class StreamAllDataTest
         using var connector = new Connector("localhost", _server!.Port);
         connector.Connect();
 
-        var received = new List<Item>();
+        var received = new List<(long PrimaryKey, byte[] Data)>();
         await foreach (var item in connector.StreamAllData("persons"))
             received.Add(item);
 
         Assert.That(received.Count, Is.EqualTo(5));
 
-        var byKey = received.GroupBy(i => i.Keys[0]).ToDictionary(g => g.Key, g => g.Select(i => i.Data[0]).OrderBy(b => b).ToList());
+        var byKey = received.GroupBy(i => i.PrimaryKey).ToDictionary(g => g.Key, g => g.Select(i => i.Data[0]).OrderBy(b => b).ToList());
 
         Assert.That(byKey[1], Is.EqualTo(new byte[] { 1 }));
         Assert.That(byKey[2], Is.EqualTo(new byte[] { 2, 3, 4 }), "All three documents sharing key 2 should be streamed");
@@ -120,7 +120,7 @@ public class StreamAllDataTest
         using var connector = new Connector("localhost", _server!.Port);
         connector.Connect();
 
-        var received = new List<Item>();
+        var received = new List<(long PrimaryKey, byte[] Data)>();
         await foreach (var item in connector.StreamAllData("persons"))
             received.Add(item);
 
@@ -181,7 +181,7 @@ public class StreamAllDataTest
         using var feedingConnector = new Connector("localhost", _server!.Port);
         feedingConnector.Connect();
 
-        var received = new List<Item>();
+        var received = new List<(long PrimaryKey, byte[] Data)>();
 
         await using var enumerator = streamingConnector.StreamAllData("persons").GetAsyncEnumerator();
 

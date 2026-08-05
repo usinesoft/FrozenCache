@@ -259,17 +259,17 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         });
     }
 
-    public List<Item> GetByPrimaryKey(string collectionName, long keyValue)
+    public List<byte[]> GetByPrimaryKey(string collectionName, long keyValue)
     {
         return _collectionStores[collectionName].GetByFirstKey(keyValue);
     }
 
-    public IEnumerable<Item> StreamAllData(string collectionName)
+    public IEnumerable<(long PrimaryKey, byte[] Data)> StreamAllData(string collectionName)
     {
         return _collectionStores[collectionName].GetAllItems();
     }
 
-    public IEnumerable<Item> StreamBySecondaryIndex(string collectionName, string indexName, long keyValue)
+    public IEnumerable<(long PrimaryKey, byte[] Data)> StreamBySecondaryIndex(string collectionName, string indexName, long keyValue)
     {
         var metadata = _metadataByCollection[collectionName];
 
