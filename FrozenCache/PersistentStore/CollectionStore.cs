@@ -484,7 +484,7 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     public List<byte[]> GetByFirstKey(long keyValue)
     {
         if (!_isReadOnly)
-            throw new InvalidOperationException("Cannot query a collection store before it has been sealed (call EndOfFeed first)");
+            throw new InvalidOperationException(ErrorMessages.CollectionStoreNotSealed);
 
         List<byte[]> result = new();
 
@@ -506,7 +506,7 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     public IEnumerable<(long PrimaryKey, byte[] Data)> GetBySecondaryIndex(int keyPosition, long keyValue)
     {
         if (!_isReadOnly)
-            throw new InvalidOperationException("Cannot query a collection store before it has been sealed (call EndOfFeed first)");
+            throw new InvalidOperationException(ErrorMessages.CollectionStoreNotSealed);
 
         if (keyPosition < 0 || keyPosition >= 1 + _secondaryIndexes.Length)
             throw new ArgumentOutOfRangeException(nameof(keyPosition));
@@ -531,7 +531,7 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     public IEnumerable<(long PrimaryKey, byte[] Data)> GetAllItems()
     {
         if (!_isReadOnly)
-            throw new InvalidOperationException("Cannot query a collection store before it has been sealed (call EndOfFeed first)");
+            throw new InvalidOperationException(ErrorMessages.CollectionStoreNotSealed);
 
         using var lease = AcquireStreamingReadLease();
 

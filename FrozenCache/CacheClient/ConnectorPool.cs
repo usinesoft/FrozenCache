@@ -89,119 +89,147 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
         var tk = _cancellationTokenSource.Token;
 
         // Start the watchdog task to monitor the connection status and reconnect if necessary.
-        _watchDogTask = Task.Run(async () =>
+        _watchDogTask = Task.Run(() => RunWatchDog(watchDogFrequencyInMilliseconds, tk), tk);
+    }
+
+    /// <summary>
+    /// Periodically checks server health and reconnects if necessary, until <paramref name="token"/> is
+    /// cancelled. Runs for the lifetime of the pool as the body of <see cref="_watchDogTask"/>.
+    /// </summary>
+    private async Task RunWatchDog(int frequencyInMilliseconds, CancellationToken token)
+    {
+        try
         {
+            while (true)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(frequencyInMilliseconds), token);
+
+                Debug.Print($"watchdog begin;frequency = {frequencyInMilliseconds} ");
+
+                token.ThrowIfCancellationRequested();
+
+                await WatchDogTick();
+
+                Debug.Print("watchdog end");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            Debug.Print("watchdog operation canceled exception");
+            // ignore
+        }
+        catch (Exception)
+        {
+            Debug.Print("watchdog exception");
+        }
+    }
+
+    /// <summary>
+    /// One watchdog check: verifies the server is reachable (via a pooled connector if the pool believes
+    /// it's connected, via a throwaway one otherwise), marks the pool disconnected and clears it if not, and
+    /// tries to reconnect if the server turned out to be up but the pool was still empty.
+    /// </summary>
+    private async Task WatchDogTick()
+    {
+        var serverUp = IsConnected
+            ? await CheckServerUpUsingPooledConnector()
+            : await CheckServerUpUsingNewConnector();
+
+        if (!serverUp)
+        {
+            IsConnected = false;
+
+            ClearPool();
+
+            Debug.Print("watchdog : server is down, clearing pool and marking as not connected");
+        }
+
+        // If the server is up and the pool is empty, we can try to reconnect
+        if (serverUp && !IsConnected)
+        {
+            Debug.Print("watchdog : reconnect");
+
             try
             {
-                while (true)
-                {
-                    await Task.Delay(TimeSpan.FromMilliseconds(watchDogFrequencyInMilliseconds), tk);
-
-                    Debug.Print($"watchdog begin;frequency = {watchDogFrequencyInMilliseconds} ");
-
-                    tk.ThrowIfCancellationRequested();
-
-                    var serverUp = false;
-
-                    if (IsConnected)
-                    {
-                        Debug.Print("watchdog : is connected check with pooled connector");
-
-                        Connector? testConnector = null;
-                        try
-                        {
-                            testConnector = await Get();
-                            await CheckCollectionVersions(testConnector);
-                            Debug.Print("watchdog : still connected");
-                            serverUp = true;
-                        }
-                        catch (Exception)
-                        {
-                            Debug.Print("watchdog : exception while checking connection");
-                        }
-                        finally
-                        {
-                            // always return the connector, whether the version check succeeded or not -
-                            // otherwise a failed check silently drains the pool by one connector each time
-                            if (testConnector != null)
-                                Return(testConnector);
-                        }
-                    }
-                    else
-                    {
-                        Debug.Print("watchdog : not connected check with new connector");
-
-                        try
-                        {
-                            using var connector = new Connector(_server, _port, _useSsl, _validateServerCertificate);
-
-
-                            if (connector.Connect())
-                            {
-                                Debug.Print("watchdog : connected, checking collection versions");
-                                try
-                                {
-                                    await CheckCollectionVersions(connector);
-                                    serverUp = true;
-                                }
-                                catch (Exception)
-                                {
-                                    Debug.Print("watchdog : exception while checking collection versions on reconnect");
-                                }
-
-                                Debug.Print($"watchdog : server is up again:{serverUp}");
-                            }
-                            else
-                            {
-                                Debug.Print("watchdog : connect returned false");
-                            }
-                        }
-                        catch (Exception e)
-                        {
-                            Debug.Print($"watchdog : exception while connecting:{e.Message}");
-                            // ignore connection errors, we will try to reconnect later
-                        }
-                    }
-
-
-                    if (!serverUp)
-                    {
-                        IsConnected = false;
-
-                        ClearPool();
-
-                        
-                        Debug.Print("watchdog : server is down, clearing pool and marking as not connected");
-                    }
-
-                    // If the server is up and the pool is empty, we can try to reconnect
-                    if (serverUp && !IsConnected)
-                    {
-                        Debug.Print("watchdog : reconnect");
-
-                        try
-                        {
-                            InternalConnect();
-                        }
-                        catch (Exception)
-                        {
-                            Debug.Print("watchdog : reconnect failed, pool is still empty");
-                        }
-                    }
-
-                    Debug.Print("watchdog end");
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                Debug.Print("watchdog operation canceled exception");
-                // ignore
+                InternalConnect();
             }
             catch (Exception)
             {
-                Debug.Print("watchdog exception");
+                Debug.Print("watchdog : reconnect failed, pool is still empty");
             }
-        }, tk);
+        }
+    }
+
+    /// <summary>
+    /// Checks server health by borrowing an existing connector from the pool - used when the pool believes
+    /// it's still connected. The connector is always returned to the pool, whether or not the check
+    /// succeeded, so a failed check doesn't silently drain the pool by one connector each time.
+    /// </summary>
+    private async Task<bool> CheckServerUpUsingPooledConnector()
+    {
+        Debug.Print("watchdog : is connected check with pooled connector");
+
+        Connector? testConnector = null;
+        try
+        {
+            testConnector = await Get();
+            await CheckCollectionVersions(testConnector);
+            Debug.Print("watchdog : still connected");
+            return true;
+        }
+        catch (Exception)
+        {
+            Debug.Print("watchdog : exception while checking connection");
+            return false;
+        }
+        finally
+        {
+            if (testConnector != null)
+                Return(testConnector);
+        }
+    }
+
+    /// <summary>
+    /// Checks server health with a fresh, throwaway connector - used when the pool believes it's
+    /// disconnected, since there's nothing pooled to borrow.
+    /// </summary>
+    private async Task<bool> CheckServerUpUsingNewConnector()
+    {
+        Debug.Print("watchdog : not connected check with new connector");
+
+        try
+        {
+            using var connector = new Connector(_server, _port, _useSsl, _validateServerCertificate);
+
+            if (!connector.Connect())
+            {
+                Debug.Print("watchdog : connect returned false");
+                return false;
+            }
+
+            Debug.Print("watchdog : connected, checking collection versions");
+
+            var serverUp = false;
+            try
+            {
+                await CheckCollectionVersions(connector);
+                serverUp = true;
+            }
+            catch (Exception)
+            {
+                Debug.Print("watchdog : exception while checking collection versions on reconnect");
+            }
+
+            Debug.Print($"watchdog : server is up again:{serverUp}");
+
+            return serverUp;
+        }
+        catch (Exception e)
+        {
+            Debug.Print($"watchdog : exception while connecting:{e.Message}");
+            // ignore connection errors, we will try to reconnect later
+            return false;
+        }
     }
 
     /// <summary>

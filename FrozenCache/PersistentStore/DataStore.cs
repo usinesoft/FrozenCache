@@ -78,12 +78,12 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         {
             var dir = collectionDirs[i];
             var metadataPath = Path.Combine(dir, MetadataFileName);
-            if (!File.Exists(metadataPath)) throw new CacheException($"Metadata file not found in {dir}");
+            if (!File.Exists(metadataPath)) throw new CacheException(ErrorMessages.MetadataFileNotFound(dir));
             var json = File.ReadAllText(metadataPath);
             collections[i] =
                 JsonSerializer.Deserialize<CollectionMetadata>(json,
                     AppJsonSerializerContext.Default.CollectionMetadata) ??
-                throw new CacheException("Failed to deserialize collection metadata");
+                throw new CacheException(ErrorMessages.FailedToDeserializeCollectionMetadata);
 
             // get available versions; a version without the completion marker is a feed that never
             // finished (crashed/disconnected client) and must not be surfaced
@@ -204,14 +204,14 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         {
             var metadataPath = Path.Combine(dir, MetadataFileName);
 
-            if (!File.Exists(metadataPath)) throw new CacheException($"Metadata file not found in {dir}");
+            if (!File.Exists(metadataPath)) throw new CacheException(ErrorMessages.MetadataFileNotFound(dir));
 
             var json = File.ReadAllText(metadataPath);
 
             var metadata =
                 JsonSerializer.Deserialize<CollectionMetadata>(json,
                     AppJsonSerializerContext.Default.CollectionMetadata) ??
-                throw new CacheException("Failed to deserialize collection metadata");
+                throw new CacheException(ErrorMessages.FailedToDeserializeCollectionMetadata);
 
             var allVersionsDirectories = Directory.EnumerateDirectories(dir)
                 .OrderBy(x => x)
@@ -274,7 +274,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         var metadata = _metadataByCollection[collectionName];
 
         var position = metadata.GetIndexPosition(indexName) ??
-                        throw new CacheException($"Collection {collectionName} has no index named {indexName}");
+                        throw new CacheException(ErrorMessages.CollectionHasNoIndexNamed(collectionName, indexName));
 
         return _collectionStores[collectionName].GetBySecondaryIndex(position, keyValue);
     }
@@ -290,13 +290,13 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
             throw new CacheException($"Collection {collectionName} not found. Call CreateCollection()");
 
         var metadataPath = Path.Combine(path, MetadataFileName);
-        if (!File.Exists(metadataPath)) throw new CacheException($"Metadata file not found in {path}");
+        if (!File.Exists(metadataPath)) throw new CacheException(ErrorMessages.MetadataFileNotFound(path));
 
         var json = File.ReadAllText(metadataPath);
 
         var collectionMetadata =
             JsonSerializer.Deserialize<CollectionMetadata>(json, AppJsonSerializerContext.Default.CollectionMetadata) ??
-            throw new CacheException("Failed to deserialize collection metadata");
+            throw new CacheException(ErrorMessages.FailedToDeserializeCollectionMetadata);
 
         var versionPath = Path.Combine(path, newVersion);
         if (Directory.Exists(versionPath))

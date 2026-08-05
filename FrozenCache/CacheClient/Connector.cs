@@ -113,7 +113,7 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
             OtherIndexes = otherIndexes
         };
 
-        if (_client == null || _stream == null) throw new InvalidOperationException("Not connected to server");
+        if (_client == null || _stream == null) throw new InvalidOperationException(ErrorMessages.NotConnectedToServer);
 
 
         await _stream.WriteMessageAsync(msg, CancellationToken.None);
@@ -132,7 +132,7 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
 
     public async Task<CollectionsDescription> GetCollectionsDescription()
     {
-        if (_client == null || _stream == null) throw new InvalidOperationException("Not connected to server");
+        if (_client == null || _stream == null) throw new InvalidOperationException(ErrorMessages.NotConnectedToServer);
         var request = new GetCollectionsDescriptionRequest();
         
         await _stream.WriteMessageAsync(request, CancellationToken.None);
@@ -148,7 +148,7 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
 
     public async Task FeedCollection(string collectionName, string newVersion, IEnumerable<Item> items)
     {
-        if (_client == null || _stream == null) throw new InvalidOperationException("Not connected to server");
+        if (_client == null || _stream == null) throw new InvalidOperationException(ErrorMessages.NotConnectedToServer);
 
         FeedItem[] batch = [];
         try
@@ -222,7 +222,7 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
 
     public async Task DropCollection(string collectionName, bool ignoreIfNotFound = true)
     {
-        if (_client == null || _stream == null) throw new InvalidOperationException("Not connected to server");
+        if (_client == null || _stream == null) throw new InvalidOperationException(ErrorMessages.NotConnectedToServer);
         var request = new DropCollectionRequest
         {
             CollectionName = collectionName
@@ -251,7 +251,7 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
             _client.ReceiveTimeout = 100;
 
 
-            if (_client == null || _stream == null) throw new InvalidOperationException("Not connected to server");
+            if (_client == null || _stream == null) throw new InvalidOperationException(ErrorMessages.NotConnectedToServer);
             var request = new PingMessage();
         
             await _stream.WriteMessageAsync(request, CancellationToken.None);
@@ -280,7 +280,7 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
     /// <returns>Results as row data</returns>
     public async Task<List<byte[]>> QueryByPrimaryKey(string collection, params long[] keyValues)
     {
-        if (_client == null || _stream == null) throw new InvalidOperationException("Not connected to server");
+        if (_client == null || _stream == null) throw new InvalidOperationException(ErrorMessages.NotConnectedToServer);
 
         if (keyValues.Length == 0)
             throw new ArgumentException("Value cannot be an empty collection.", nameof(keyValues));
@@ -290,35 +290,40 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
 
         List<byte[]> results = [];
 
-        var stop = false;
-
-        while (!stop)
+        while (await ReadQueryResponseInto(_stream, results))
         {
-            var response = await _stream.ReadMessageAsync(CancellationToken.None);
-
-            if (response is ResultWithData queryResult)
-            {
-                // no data in the end marker
-                if (queryResult.IsEndMarker)
-                    break;
-
-                foreach (var t in queryResult.ObjectsData) results.Add(t);
-
-                if (queryResult.SingleAnswer)
-                    stop = true; // Single answer means we stop here
-            }
-            else if (response is StatusResponse status)
-            {
-                if (!status.Success) throw new CacheException($"Query failed: {status.ErrorMessage}");
-                stop = true; // End of query
-            }
-            else
-            {
-                throw UnexpectedResponse(response);
-            }
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// Reads one query response and folds any data into <paramref name="results"/>. Returns true while more
+    /// responses are still expected, false once the query is complete (an end marker, a single-answer result,
+    /// or a successful status).
+    /// </summary>
+    private async Task<bool> ReadQueryResponseInto(Stream stream, List<byte[]> results)
+    {
+        var response = await stream.ReadMessageAsync(CancellationToken.None);
+
+        switch (response)
+        {
+            case ResultWithData { IsEndMarker: true }:
+                return false; // no data in the end marker
+
+            case ResultWithData queryResult:
+                results.AddRange(queryResult.ObjectsData);
+                return !queryResult.SingleAnswer; // single answer means we stop here
+
+            case StatusResponse { Success: false } status:
+                throw new CacheException($"Query failed: {status.ErrorMessage}");
+
+            case StatusResponse:
+                return false; // end of query
+
+            default:
+                throw UnexpectedResponse(response);
+        }
     }
 
     /// <summary>
@@ -330,7 +335,7 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
     /// <param name="collection">name of an existing, already fed collection</param>
     public async IAsyncEnumerable<(long PrimaryKey, byte[] Data)> StreamAllData(string collection)
     {
-        if (_client == null || _stream == null) throw new InvalidOperationException("Not connected to server");
+        if (_client == null || _stream == null) throw new InvalidOperationException(ErrorMessages.NotConnectedToServer);
 
         var request = new StreamAllDataRequest { CollectionName = collection };
         await _stream.WriteMessageAsync(request, CancellationToken.None);
@@ -367,7 +372,7 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
     /// <param name="keyValue"></param>
     public async IAsyncEnumerable<(long PrimaryKey, byte[] Data)> StreamBySecondaryIndex(string collection, string indexName, long keyValue)
     {
-        if (_client == null || _stream == null) throw new InvalidOperationException("Not connected to server");
+        if (_client == null || _stream == null) throw new InvalidOperationException(ErrorMessages.NotConnectedToServer);
 
         var request = new StreamBySecondaryIndexRequest
         {

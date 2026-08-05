@@ -1,0 +1,625 @@
+using System.Buffers;
+using System.Diagnostics;
+using System.Net;
+using System.Net.Security;
+using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
+using System.Threading.Channels;
+using Messages;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using PersistentStore;
+using Serilog;
+using static System.String;
+using ILogger = Microsoft.Extensions.Logging.ILogger;
+
+#pragma warning disable S6667
+
+namespace FrozenCache.Server;
+
+public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, IOptions<ServerSettings> configuration)
+    : IHostedService
+{
+    private IDataStore Store { get; } = store;
+
+    private ILogger Logger { get; } = logger;
+    private IOptions<ServerSettings> Configuration { get; } = configuration;
+
+    private readonly CancellationTokenSource _cts = new();
+
+
+    public int Port { get; private set; }
+
+    private readonly FeedItemBatchSerializer _batchSerializer = new();
+    private TcpListener? _listener;
+
+    private X509Certificate2? _serverCertificate;
+
+    private bool _disposed;
+
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        Logger.LogInformation("Starting TCP server...");
+        Debug.Print("Starting TCP server");
+
+        var ct = _cts.Token;
+
+        try
+        {
+            if (Configuration.Value.UseSsl)
+            {
+                if (IsNullOrWhiteSpace(Configuration.Value.SslCertificatePath))
+                    throw new InvalidOperationException(
+                        "ServerSettings:SslCertificatePath must be set when ServerSettings:UseSsl is true");
+
+                _serverCertificate = X509CertificateLoader.LoadPkcs12FromFile(
+                    Configuration.Value.SslCertificatePath, Configuration.Value.SslCertificatePassword);
+
+                Logger.LogInformation("SSL enabled, using certificate {Subject}", _serverCertificate.Subject);
+            }
+
+            _listener = new TcpListener(IPAddress.Any, Configuration.Value.Port);
+            _listener.Server.NoDelay = true; // Disable Nagle's algorithm for low latency
+
+            _listener.Server.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only, 0);
+
+
+            _listener.Start();
+
+            if (!(_listener.LocalEndpoint is IPEndPoint endpoint))
+                throw new NotSupportedException("Can not initialize server");
+
+            Port = endpoint.Port;
+
+            Debug.Print($"TCP server is listening on port {Port}");
+
+
+            Logger.LogInformation("Server started on port {Port}", Port);
+
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    while (!ct.IsCancellationRequested)
+                    {
+                        var client = await _listener.AcceptTcpClientAsync(ct);
+                        client.NoDelay = true; // Disable Nagle's algorithm for low latency
+
+
+                        // client loop
+                        _ = Task.Run(async () => { await ClientLoop(ct, client); }, ct);
+                    }
+
+                    Logger.LogWarning("Server stopped");
+                }
+                catch (OperationCanceledException)
+                {
+                    Logger.LogWarning("Server stopped");
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex, "Error starting TCP server: {Message}", ex.Message);
+                }
+            }, ct);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error starting TCP server: {Message}", ex.Message);
+            Debug.Print($"Error starting TCP server: {ex.Message}");
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task ClientLoop(CancellationToken cancellationToken, TcpClient client)
+    {
+        Stream? stream = null;
+
+        try
+        {
+            stream = await EstablishStreamAsync(client, cancellationToken);
+
+            if (stream == null)
+                // SSL handshake failed; already logged and the connection already closed
+                return;
+
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                var message = await stream.ReadMessageAsync(cancellationToken);
+
+                if (message == null)
+                {
+                    Logger.LogInformation("Client disconnected");
+                    client.Close();
+                    break; // Client disconnected
+                }
+
+                // The ping request is a special case, it has no data, so we can respond immediately
+                if (message is PingMessage ping)
+                {
+                    Debug.Print("server ping request received");
+                    await stream.WriteMessageAsync(ping, cancellationToken);
+
+                    continue;
+                }
+
+                switch (message)
+                {
+                    case BeginFeedRequest beginFeedRequest:
+                        await ProcessFeedSession(beginFeedRequest, stream);
+                        break;
+                    case CreateCollectionRequest createCollectionRequest:
+                        await ProcessCreateCollection(createCollectionRequest, stream, cancellationToken);
+                        break;
+                    case DropCollectionRequest dropCollectionRequest:
+                        await ProcessDropCollection(dropCollectionRequest, stream, cancellationToken);
+                        break;
+                    case GetCollectionsDescriptionRequest:
+                        var collections = Store.GetCollectionInformation();
+                        await stream.WriteMessageAsync(collections, cancellationToken);
+                        break;
+                    case QueryByPrimaryKey queryRequest:
+                        await ProcessSimpleQuery(queryRequest, stream, cancellationToken);
+                        break;
+                    case StreamAllDataRequest streamAllDataRequest:
+                        await ProcessStreamAllData(streamAllDataRequest, stream, cancellationToken);
+                        break;
+                    case StreamBySecondaryIndexRequest streamBySecondaryIndexRequest:
+                        await ProcessStreamBySecondaryIndex(streamBySecondaryIndexRequest, stream, cancellationToken);
+                        break;
+                    default:
+                        Logger.LogWarning("Unknown message type received: {Type}", message.GetType().Name);
+                        await stream.WriteMessageAsync(new StatusResponse
+                            { Success = false, ErrorMessage = "Unknown message type" }, cancellationToken);
+                        break;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Client disconnected or operation was cancelled
+            Logger.LogWarning("Cancellation requested");
+            if (stream != null)
+                await stream.WriteMessageAsync(
+                    new StatusResponse { Success = false, ErrorMessage = "Operation cancelled" },
+                    cancellationToken);
+        }
+        catch (CacheException cacheEx)
+        {
+            Logger.LogError("Cache error processing client request: {Message}", cacheEx.Message);
+            if (stream != null)
+                await stream.WriteMessageAsync(
+                    new StatusResponse { Success = false, ErrorMessage = cacheEx.Message },
+                    cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error processing client request: {Message}", ex.Message);
+            if (stream != null)
+                await stream.WriteMessageAsync(
+                    new StatusResponse { Success = false, ErrorMessage = ex.Message },
+                    cancellationToken);
+        }
+        finally
+        {
+            if (stream != null)
+                await stream.DisposeAsync();
+
+            client.Close();
+        }
+    }
+
+    /// <summary>
+    /// Returns the plain network stream, or - when <see cref="ServerSettings.UseSsl"/> is enabled - a
+    /// <see cref="SslStream"/> upgraded from it via a TLS handshake. Returns null if the handshake fails, in
+    /// which case the connection has already been logged and closed.
+    /// </summary>
+    private async Task<Stream?> EstablishStreamAsync(TcpClient client, CancellationToken cancellationToken)
+    {
+        var networkStream = client.GetStream();
+
+        if (!Configuration.Value.UseSsl)
+            return networkStream;
+
+        var sslStream = new SslStream(networkStream, false);
+
+        try
+        {
+            await sslStream.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+            {
+                ServerCertificate = _serverCertificate,
+                ClientCertificateRequired = false
+            }, cancellationToken);
+
+            return sslStream;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "SSL handshake failed for incoming connection from {RemoteEndPoint}. This usually means a " +
+                "client without SSL enabled connected to this SSL-enabled server.",
+                client.Client.RemoteEndPoint);
+            await sslStream.DisposeAsync();
+            client.Close();
+            return null;
+        }
+    }
+
+    private async Task ProcessDropCollection(DropCollectionRequest dropCollectionRequest, Stream stream,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (IsNullOrWhiteSpace(dropCollectionRequest.CollectionName))
+                throw new ArgumentException("Collection name is empty");
+
+            Log.Information("Drop collection message received for collection {Collection}",
+                dropCollectionRequest.CollectionName);
+
+            Store.DropCollection(dropCollectionRequest.CollectionName);
+            await stream.WriteMessageAsync(new StatusResponse(), cancellationToken);
+
+            Log.Information("Collection {Collection} was dropped", dropCollectionRequest.CollectionName);
+        }
+        catch (Exception e)
+        {
+            Logger.LogError("Error while dropping collection:{Message}", e.Message);
+            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = e.Message },
+                cancellationToken);
+        }
+    }
+
+    private async Task ProcessSimpleQuery(QueryByPrimaryKey queryRequest, Stream stream, CancellationToken ct)
+    {
+        try
+        {
+            if (IsNullOrWhiteSpace(queryRequest.CollectionName))
+                throw new CacheException("Collection name is required in QueryByPrimaryKey request");
+
+            var result = new ResultWithData { CollectionName = queryRequest.CollectionName };
+
+            var temp = new List<byte[]>();
+
+            foreach (var keyValue in queryRequest.PrimaryKeyValues)
+                temp.AddRange(Store.GetByPrimaryKey(queryRequest.CollectionName, keyValue));
+
+            result.ObjectsData = temp.ToArray();
+
+
+            result.SingleAnswer = true; //single message containing multiple items
+
+            await stream.WriteMessageAsync(result, ct);
+        }
+        catch (Exception e)
+        {
+            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = e.Message }, ct);
+        }
+    }
+
+    /// <summary>
+    /// Streams every document currently in a collection's active version to the client, using the same
+    /// manual big-batch framing as a feed session (<see cref="FeedItemBatchSerializer"/>), terminated by an
+    /// empty batch. Validation happens before the initial acknowledgement; once that's sent, the client's
+    /// reader is committed to batch framing, so a failure from that point on can no longer be reported as a
+    /// StatusResponse - it just ends the connection, the same way a feed's own network failures do.
+    /// </summary>
+    private async Task ProcessStreamAllData(StreamAllDataRequest request, Stream stream, CancellationToken ct)
+    {
+        var collectionName = request.CollectionName;
+
+        try
+        {
+            if (IsNullOrWhiteSpace(collectionName))
+                throw new CacheException(ErrorMessages.CollectionNameIsRequired);
+
+            var metadata = Store.GetCollectionMetadata(collectionName);
+            if (metadata == null)
+                throw new CacheException(ErrorMessages.CollectionDoesNotExist(collectionName));
+
+            if (metadata.LastVersion == null)
+                throw new CacheException(ErrorMessages.CollectionHasNoDataToStream(collectionName));
+        }
+        catch (Exception e)
+        {
+            Logger.LogError("Error while starting to stream collection {Collection}: {Message}", collectionName, e.Message);
+            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = e.Message }, ct);
+            return;
+        }
+
+        await stream.WriteMessageAsync(new StatusResponse(), ct);
+
+        Logger.LogInformation("Streaming all data for collection {Collection}", collectionName);
+
+        var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+
+        const int maxBatchSize = 1_000_000; // 1 MB per batch
+        const int maxMessagesPerBatch = 5_000; // 5_000 items per batch
+
+        var batch = ArrayPool<FeedItem>.Shared.Rent(maxMessagesPerBatch);
+        try
+        {
+            var batchSize = 0;
+
+            foreach (var (primaryKey, data) in Store.StreamAllData(collectionName))
+            {
+                batch[batchSize++] = new FeedItem { Data = data, Keys = [primaryKey] };
+
+                if (batchSize >= maxMessagesPerBatch)
+                {
+                    _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize), maxBatchSize);
+                    batchSize = 0;
+                }
+            }
+
+            _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize));
+
+            if (batchSize != 0) // if the last one was not empty, write an empty batch as the end marker
+                _batchSerializer.Serialize(writer, Array.Empty<FeedItem>());
+
+            Logger.LogInformation("Finished streaming collection {Collection}", collectionName);
+        }
+        catch (Exception e)
+        {
+            Logger.LogError(e, "Error while streaming collection {Collection}: {Message}", collectionName, e.Message);
+        }
+        finally
+        {
+            ArrayPool<FeedItem>.Shared.Return(batch);
+        }
+    }
+
+    /// <summary>
+    /// Streams every document in a collection's active version whose value at a named index equals a given
+    /// key, using the same manual big-batch framing as <see cref="ProcessStreamAllData"/>. The index name is
+    /// resolved (and validated) up front, before the acknowledgement, for the same reason collection
+    /// existence is: once the ack is sent, the client's reader is committed to batch framing and a failure
+    /// can no longer be reported as a StatusResponse.
+    /// </summary>
+    private async Task ProcessStreamBySecondaryIndex(StreamBySecondaryIndexRequest request, Stream stream, CancellationToken ct)
+    {
+        var collectionName = request.CollectionName;
+
+        try
+        {
+            if (IsNullOrWhiteSpace(collectionName))
+                throw new CacheException(ErrorMessages.CollectionNameIsRequired);
+
+            if (IsNullOrWhiteSpace(request.IndexName))
+                throw new CacheException("Index name is required");
+
+            var metadata = Store.GetCollectionMetadata(collectionName);
+            if (metadata == null)
+                throw new CacheException(ErrorMessages.CollectionDoesNotExist(collectionName));
+
+            if (metadata.LastVersion == null)
+                throw new CacheException(ErrorMessages.CollectionHasNoDataToStream(collectionName));
+
+            if (metadata.GetIndexPosition(request.IndexName) == null)
+                throw new CacheException(ErrorMessages.CollectionHasNoIndexNamed(collectionName, request.IndexName));
+        }
+        catch (Exception e)
+        {
+            Logger.LogError("Error while starting to stream collection {Collection} by index {Index}: {Message}",
+                collectionName, request.IndexName, e.Message);
+            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = e.Message }, ct);
+            return;
+        }
+
+        await stream.WriteMessageAsync(new StatusResponse(), ct);
+
+        Logger.LogInformation("Streaming collection {Collection} by index {Index}={Key}",
+            collectionName, request.IndexName, request.KeyValue);
+
+        var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+
+        const int maxBatchSize = 1_000_000; // 1 MB per batch
+        const int maxMessagesPerBatch = 5_000; // 5_000 items per batch
+
+        var batch = ArrayPool<FeedItem>.Shared.Rent(maxMessagesPerBatch);
+        try
+        {
+            var batchSize = 0;
+
+            foreach (var (primaryKey, data) in Store.StreamBySecondaryIndex(collectionName, request.IndexName, request.KeyValue))
+            {
+                batch[batchSize++] = new FeedItem { Data = data, Keys = [primaryKey] };
+
+                if (batchSize >= maxMessagesPerBatch)
+                {
+                    _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize), maxBatchSize);
+                    batchSize = 0;
+                }
+            }
+
+            _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize));
+
+            if (batchSize != 0) // if the last one was not empty, write an empty batch as the end marker
+                _batchSerializer.Serialize(writer, Array.Empty<FeedItem>());
+
+            Logger.LogInformation("Finished streaming collection {Collection} by index {Index}", collectionName, request.IndexName);
+        }
+        catch (Exception e)
+        {
+            Logger.LogError(e, "Error while streaming collection {Collection} by index {Index}: {Message}",
+                collectionName, request.IndexName, e.Message);
+        }
+        finally
+        {
+            ArrayPool<FeedItem>.Shared.Return(batch);
+        }
+    }
+
+    private async Task ProcessCreateCollection(CreateCollectionRequest createRequest, Stream stream,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (IsNullOrWhiteSpace(createRequest.PrimaryKeyName))
+                throw new CacheException("Primary key name is mandatory in CreateCollection request");
+
+
+            var metadata = new CollectionMetadata(createRequest.CollectionName, createRequest.PrimaryKeyName,
+                createRequest.OtherIndexes);
+
+
+            var newCollection = Store.CreateCollection(metadata);
+
+            if (!newCollection)
+                Logger.LogInformation(
+                    "Creating collection {Collection} with primary key {PrimaryKey} and indexes {Indexes}",
+                    createRequest.CollectionName, createRequest.PrimaryKeyName, createRequest.OtherIndexes);
+
+            await stream.WriteMessageAsync(new StatusResponse(), ct);
+        }
+        catch (Exception e)
+        {
+            await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = e.Message }, ct);
+        }
+    }
+
+
+    private IEnumerable<FeedItem> ReadItems(Stream stream)
+    {
+        var reader = new BinaryReader(stream, Encoding.UTF8, true);
+
+        while (true)
+        {
+            var msgs = _batchSerializer.Deserialize(reader);
+
+            if (msgs.Count == 0)
+                yield break; // End of stream
+
+            foreach (var msg in msgs) yield return msg;
+        }
+    }
+
+    private async Task ProcessFeedSession(BeginFeedRequest beginRequest, Stream stream)
+    {
+        Task? feederTask = null;
+
+        try
+        {
+            if (IsNullOrWhiteSpace(beginRequest.CollectionName))
+                throw new CacheException(ErrorMessages.CollectionNameIsRequired);
+
+            if (IsNullOrWhiteSpace(beginRequest.CollectionVersion))
+                throw new CacheException("Collection version is required");
+
+            var collectionName = beginRequest.CollectionName;
+            var collectionVersion = beginRequest.CollectionVersion;
+
+            var metadata = Store.GetCollectionMetadata(collectionName);
+            if (metadata == null)
+                throw new CacheException(ErrorMessages.CollectionDoesNotExist(collectionName));
+
+            var oldVersion = metadata.LastVersion;
+            if (oldVersion == collectionVersion)
+                throw new CacheException($"Collection {collectionName} already has version {collectionVersion}");
+
+            if (oldVersion != null &&
+                Compare(oldVersion, collectionVersion, StringComparison.InvariantCultureIgnoreCase) > 0)
+                throw new CacheException($"Collection {collectionName} already has a newer version {oldVersion}");
+
+            // If we reach this point, we can start the feeding process. Let the client know about it
+            await stream.WriteMessageAsync(new StatusResponse(), CancellationToken.None);
+
+            Logger.LogInformation("Begin feeding collection {Collection}. New version is {Version}",
+                beginRequest.CollectionName, beginRequest.CollectionVersion);
+
+            var internalChannel = Channel.CreateBounded<FeedItem>(1_000_000);
+
+            feederTask = StartCollectionFeeder(beginRequest.CollectionName, beginRequest.CollectionVersion,
+                internalChannel);
+
+            try
+            {
+                foreach (var item in ReadItems(stream))
+                    await internalChannel.Writer.WriteAsync(item, CancellationToken.None);
+
+                internalChannel.Writer.Complete();
+            }
+            catch (Exception readEx)
+            {
+                // The client disconnected or the stream is otherwise broken mid-feed. Fault the channel so
+                // the feeder task stops waiting for more items instead of hanging forever, and aborts
+                // (deletes) the partially-written version instead of leaving it behind.
+                internalChannel.Writer.Complete(readEx);
+                throw;
+            }
+
+            await feederTask;
+
+            Logger.LogInformation("Feeding collection {Collection} completed", beginRequest.CollectionName);
+
+            await stream.WriteMessageAsync(new StatusResponse(), CancellationToken.None);
+        }
+        catch (Exception e)
+        {
+            Logger.LogError("Error while processing feed session for collection {Collection} {Version}: {Message}",
+                beginRequest.CollectionName, beginRequest.CollectionVersion, e.Message);
+
+            if (feederTask != null)
+                try
+                {
+                    // wait for the feeder to finish aborting so the partial version is cleaned up
+                    // before this session ends; the feeder already logs its own failure.
+                    await feederTask;
+                }
+                catch
+                {
+                    // ignored, already logged by the feeder task
+                }
+
+            await stream.WriteMessageAsync(new StatusResponse { ErrorMessage = e.Message, Success = false },
+                CancellationToken.None);
+        }
+    }
+
+
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        Logger.LogInformation("Stopping TCP server...");
+
+        if (_disposed) return;
+
+        // Cancel the internal token source to stop the server
+        await _cts.CancelAsync();
+
+        _listener?.Dispose();
+
+        _cts.Dispose();
+
+        _disposed = true;
+
+        await Task.Delay(200, cancellationToken);
+    }
+
+    private static async IAsyncEnumerable<Item> ItemsFromChannel(Channel<FeedItem> channel)
+    {
+        if (channel == null)
+            throw new InvalidOperationException("Internal channel is not initialized");
+
+        await foreach (var item in channel.Reader.ReadAllAsync()) yield return new Item(item.Data, item.Keys);
+    }
+
+    private Task StartCollectionFeeder(string collectionName, string collectionVersion,
+        Channel<FeedItem> internalChannel)
+    {
+        var task = Task.Run(async () =>
+        {
+            try
+            {
+                await Store.FeedCollectionAsync(collectionName, collectionVersion, ItemsFromChannel(internalChannel));
+            }
+            catch (Exception e)
+            {
+                Logger.LogError(e, "Error while feeding collection {Collection}: {Message}", collectionName, e.Message);
+            }
+        });
+
+        return task;
+    }
+}

@@ -1,6 +1,6 @@
 using System.Text;
 using CacheClient;
-using FrozenCache;
+using FrozenCache.Server;
 using Messages;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;

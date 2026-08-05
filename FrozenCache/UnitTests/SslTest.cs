@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using CacheClient;
-using FrozenCache;
+using FrozenCache.Server;
 using Messages;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;

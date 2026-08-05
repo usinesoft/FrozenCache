@@ -40,17 +40,27 @@ to that project; JSON types must be registered on the `JsonSerializerContext` in
 ```
 Messages          <- wire protocol (MessagePack DTOs, MessageType enum, TCP framing helpers). No project deps.
 PersistentStore    <- storage engine (memory-mapped files, indexes). Depends on Messages.
-FrozenCache        <- server host (ASP.NET Core minimal API + a raw TCP listener as an IHostedService).
-                       Depends on Messages, PersistentStore, CacheClient (client used by ProfilingTool via this project).
+FrozenCache.Server <- TCP server engine (HostedTcpServer, ServerSettings). Depends on Messages, PersistentStore only
+                       — deliberately does not depend on CacheClient, so tests and tools can exercise the server
+                       without pulling in the ASP.NET Core host.
+FrozenCache        <- server host exe (ASP.NET Core minimal API hosting FrozenCache.Server's HostedTcpServer as
+                       an IHostedService). Depends on FrozenCache.Server, Messages, PersistentStore.
 CacheClient        <- client library (connection pooling, aggregation across replicas, local LRU cache).
-                       Depends on Messages, PersistentStore (for the Item type).
-ProfilingTool       <- perf-testing console app, feeds data through the real TCP path.
+                       Depends on Messages only.
+ProfilingTool       <- perf-testing console app; hosts FrozenCache.Server's HostedTcpServer in-process and feeds
+                       data through the real TCP path. Depends on CacheClient, FrozenCache.Server, Messages,
+                       PersistentStore.
 PerTest             <- another standalone perf/load console app driving a running server on localhost:5123.
-UnitTests           <- NUnit tests; depends on every other project (only project allowed to reference everything).
+                       Depends on CacheClient, Messages only.
+UnitTests           <- NUnit tests; depends on CacheClient, FrozenCache.Server, Messages, PersistentStore -
+                       deliberately not on the FrozenCache exe itself.
 ```
 
-`Messages` and `PersistentStore` must stay free of dependencies on `FrozenCache`/`CacheClient` — the dependency
-graph is intentionally one-directional (protocol/storage at the bottom, server and client on top).
+`Messages` and `PersistentStore` must stay free of dependencies on `FrozenCache.Server`/`FrozenCache`/`CacheClient`
+— the dependency graph is intentionally one-directional (protocol/storage at the bottom, server engine and client
+on top, the ASP.NET Core host and test/perf tools above that). Nothing outside `FrozenCache` itself (the exe)
+should ever need to reference it — `HostedTcpServer`/`ServerSettings` live in `FrozenCache.Server` precisely so
+tests and tools can depend on the server engine without dragging in the web host.
 
 ## Wire protocol (`Messages`)
 
@@ -85,10 +95,11 @@ graph is intentionally one-directional (protocol/storage at the bottom, server a
 - Unsafe pointer access to memory-mapped views (`ReadBytes`/`WriteBytes`/`ReadFileMap`) assumes the caller has
   already validated offsets/lengths; there are no bounds checks at that layer.
 
-## Server (`FrozenCache/HostedTcpServer.cs`)
+## Server (`FrozenCache.Server/HostedTcpServer.cs`)
 
-- One `IHostedService` runs a raw `TcpListener` alongside the normal ASP.NET Core HTTP pipeline (started in
-  `Program.cs`). HTTP is used only for `/health` and `GET /collections`; all data operations (create/drop
+- One `IHostedService` runs a raw `TcpListener` alongside the normal ASP.NET Core HTTP pipeline (registered by
+  `FrozenCache/Program.cs`, which is the only place `FrozenCache.Server` is hosted inside ASP.NET Core). HTTP is
+  used only for `/health` and `GET /collections`; all data operations (create/drop
   collection, feed, query) go over the custom TCP protocol on the port from `ServerSettings.Port`
   (`appsettings.json` → `ServerSettings:Port`, default 5123).
 - Each accepted TCP connection runs its own `ClientLoop` task reading one `IMessage` at a time and dispatching

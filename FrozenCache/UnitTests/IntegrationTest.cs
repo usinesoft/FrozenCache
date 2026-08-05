@@ -2,7 +2,7 @@
 using System.Net.Sockets;
 using System.Text;
 using CacheClient;
-using FrozenCache;
+using FrozenCache.Server;
 using MessagePack;
 using Messages;
 using Microsoft.Extensions.Logging;

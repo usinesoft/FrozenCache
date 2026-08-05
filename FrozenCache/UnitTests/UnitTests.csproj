@@ -17,7 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CacheClient\CacheClient.csproj" />
-    <ProjectReference Include="..\FrozenCache\FrozenCache.csproj" />
+    <ProjectReference Include="..\FrozenCache.Server\FrozenCache.Server.csproj" />
     <ProjectReference Include="..\Messages\Messages.csproj" />
     <ProjectReference Include="..\PersistentStore\PersistentStore.csproj" />
   </ItemGroup>
