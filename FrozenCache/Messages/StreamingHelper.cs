@@ -16,8 +16,10 @@ public static class StreamingHelper
     [ThreadStatic]
     static byte[]? _buffer;
 
-    public static async Task WriteMessageAsync(this Stream stream, IMessage message, CancellationToken ct)
+    public static async Task WriteMessageAsync(this Stream? stream, IMessage message, CancellationToken ct)
     {
+        if(stream is null)
+            return; 
 
         if (_memoryStream == null)
         {

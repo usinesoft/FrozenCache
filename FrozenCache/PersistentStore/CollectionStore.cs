@@ -505,12 +505,20 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     /// </summary>
     public IEnumerable<(long PrimaryKey, byte[] Data)> GetBySecondaryIndex(int keyPosition, long keyValue)
     {
+        // Validated eagerly, on the calling thread, rather than inside the iterator below: a method
+        // containing "yield return" is entirely deferred, so a throw inside it would otherwise only surface
+        // once the caller starts enumerating - not when GetBySecondaryIndex is called.
         if (!_isReadOnly)
             throw new InvalidOperationException(ErrorMessages.CollectionStoreNotSealed);
 
         if (keyPosition < 0 || keyPosition >= 1 + _secondaryIndexes.Length)
             throw new ArgumentOutOfRangeException(nameof(keyPosition));
 
+        return GetBySecondaryIndexCore(keyPosition, keyValue);
+    }
+
+    private IEnumerable<(long PrimaryKey, byte[] Data)> GetBySecondaryIndexCore(int keyPosition, long keyValue)
+    {
         using var lease = AcquireStreamingReadLease();
 
         var index = GetIndex(keyPosition);
@@ -530,9 +538,16 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     /// </summary>
     public IEnumerable<(long PrimaryKey, byte[] Data)> GetAllItems()
     {
+        // See the comment in GetBySecondaryIndex: validated eagerly rather than inside the iterator, so a
+        // caller that calls this before the store is sealed gets an immediate throw, not a deferred one.
         if (!_isReadOnly)
             throw new InvalidOperationException(ErrorMessages.CollectionStoreNotSealed);
 
+        return GetAllItemsCore();
+    }
+
+    private IEnumerable<(long PrimaryKey, byte[] Data)> GetAllItemsCore()
+    {
         using var lease = AcquireStreamingReadLease();
 
         foreach (var (key, entry) in _primaryIndex.GetAll())

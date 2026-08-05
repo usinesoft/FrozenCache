@@ -310,7 +310,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
 
     private void EndFeed(CollectionStore collectionStore, string collectionName)
     {
-        if (collectionStore == null) throw new ArgumentNullException(nameof(collectionStore));
+        ArgumentNullException.ThrowIfNull(collectionStore);
 
         // flush data to disk and build the index
         collectionStore.EndOfFeed();

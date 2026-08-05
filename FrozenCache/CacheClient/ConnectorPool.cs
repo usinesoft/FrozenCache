@@ -69,8 +69,7 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
     {
         if (capacity < 1) throw new ArgumentOutOfRangeException(nameof(capacity), "Capacity must be at least 1");
 
-        if (string.IsNullOrWhiteSpace(server))
-            throw new ArgumentNullException(nameof(server), "Server cannot be null or empty");
+        ArgumentException.ThrowIfNullOrWhiteSpace(server);
 
         if (port is <= 0 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(port), "Port must be between 1 and 65535");
@@ -315,7 +314,7 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
     /// <param name="connector">The connector to return.</param>
     public void Return(Connector connector)
     {
-        if (connector == null) throw new ArgumentNullException(nameof(connector), "Connector cannot be null");
+        ArgumentNullException.ThrowIfNull(connector);
 
         if (!connector.IsHealthy)
         {

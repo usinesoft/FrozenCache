@@ -333,20 +333,28 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
     ///     needs is expected to already be present in the serialized data itself.
     /// </summary>
     /// <param name="collection">name of an existing, already fed collection</param>
-    public async IAsyncEnumerable<(long PrimaryKey, byte[] Data)> StreamAllData(string collection)
+    public IAsyncEnumerable<(long PrimaryKey, byte[] Data)> StreamAllData(string collection)
     {
+        // Validated eagerly, on the calling thread, rather than inside the async iterator below: a method
+        // containing "yield return" is entirely deferred, so a throw inside it would otherwise only surface
+        // once the caller starts enumerating - not when StreamAllData is called.
         if (_client == null || _stream == null) throw new InvalidOperationException(ErrorMessages.NotConnectedToServer);
 
-        var request = new StreamAllDataRequest { CollectionName = collection };
-        await _stream.WriteMessageAsync(request, CancellationToken.None);
+        return StreamAllDataCore(_stream, collection);
+    }
 
-        var ack = await _stream.ReadMessageAsync(CancellationToken.None);
+    private async IAsyncEnumerable<(long PrimaryKey, byte[] Data)> StreamAllDataCore(Stream stream, string collection)
+    {
+        var request = new StreamAllDataRequest { CollectionName = collection };
+        await stream.WriteMessageAsync(request, CancellationToken.None);
+
+        var ack = await stream.ReadMessageAsync(CancellationToken.None);
         if (ack is StatusResponse { Success: false } status)
             throw new CacheException($"Failed to stream collection: {status.ErrorMessage}");
         if (ack is not StatusResponse)
             throw UnexpectedResponse(ack);
 
-        var reader = new BinaryReader(_stream, Encoding.UTF8, true);
+        var reader = new BinaryReader(stream, Encoding.UTF8, true);
 
         while (true)
         {
@@ -370,25 +378,32 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
     /// <param name="collection">name of an existing, already fed collection</param>
     /// <param name="indexName">name of a declared index (primary or secondary) on the collection</param>
     /// <param name="keyValue"></param>
-    public async IAsyncEnumerable<(long PrimaryKey, byte[] Data)> StreamBySecondaryIndex(string collection, string indexName, long keyValue)
+    public IAsyncEnumerable<(long PrimaryKey, byte[] Data)> StreamBySecondaryIndex(string collection, string indexName, long keyValue)
     {
+        // See the comment in StreamAllData: validated eagerly rather than inside the async iterator, so a
+        // caller not connected gets an immediate throw, not a deferred one.
         if (_client == null || _stream == null) throw new InvalidOperationException(ErrorMessages.NotConnectedToServer);
 
+        return StreamBySecondaryIndexCore(_stream, collection, indexName, keyValue);
+    }
+
+    private async IAsyncEnumerable<(long PrimaryKey, byte[] Data)> StreamBySecondaryIndexCore(Stream stream, string collection, string indexName, long keyValue)
+    {
         var request = new StreamBySecondaryIndexRequest
         {
             CollectionName = collection,
             IndexName = indexName,
             KeyValue = keyValue
         };
-        await _stream.WriteMessageAsync(request, CancellationToken.None);
+        await stream.WriteMessageAsync(request, CancellationToken.None);
 
-        var ack = await _stream.ReadMessageAsync(CancellationToken.None);
+        var ack = await stream.ReadMessageAsync(CancellationToken.None);
         if (ack is StatusResponse { Success: false } status)
             throw new CacheException($"Failed to stream by secondary index: {status.ErrorMessage}");
         if (ack is not StatusResponse)
             throw UnexpectedResponse(ack);
 
-        var reader = new BinaryReader(_stream, Encoding.UTF8, true);
+        var reader = new BinaryReader(stream, Encoding.UTF8, true);
 
         while (true)
         {

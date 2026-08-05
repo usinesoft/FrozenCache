@@ -25,8 +25,6 @@ public sealed class LruCachePolicy(int capacity, int evictionCount):ICachePolicy
     /// </summary>
     public int Capacity { get; } = capacity;
 
-    private int Count => _cachedObjectsByKey.Count;
-
     public bool EvictionRequired => _cachedObjectsByKey.Count > Capacity;
 
     public EvictionType Type => EvictionType.LessRecentlyUsed;
@@ -45,7 +43,7 @@ public sealed class LruCachePolicy(int capacity, int evictionCount):ICachePolicy
     /// <param name="newItem"></param>
     public void AddNew(CachedItem newItem)
     {
-        if (newItem == null) throw new ArgumentNullException(nameof(newItem));
+        ArgumentNullException.ThrowIfNull(newItem);
 
         if (_cachedObjectsByKey.ContainsKey(newItem.PrimaryKey))
             throw new NotSupportedException("Item already in eviction queue");

@@ -56,8 +56,12 @@ public class Aggregator
         lock (_versionMapLock)
         {
             foreach (var pool in _pools)
-            foreach (var (collectionName, version) in pool.LastKnownVersions)
-                AdvanceClusterLastVersionLocked(collectionName, version);
+            {
+                foreach (var (collectionName, version) in pool.LastKnownVersions)
+                {
+                    AdvanceClusterLastVersionLocked(collectionName, version);
+                }
+            }
         }
     }
 
@@ -147,7 +151,8 @@ public class Aggregator
     public Aggregator(int capacity, bool useSsl, bool validateServerCertificate,
         int watchDogFrequencyInMilliseconds = 10_000, params (string server, int port)[] servers)
     {
-        if (servers == null || servers.Length == 0) throw new ArgumentNullException(nameof(servers), "At least one server must be specified");
+        ArgumentNullException.ThrowIfNull(servers);
+        if (servers.Length == 0) throw new ArgumentException("At least one server must be specified", nameof(servers));
 
         foreach (var (server, port) in servers)
         {
@@ -379,8 +384,8 @@ public class Aggregator
     /// <exception cref="CacheException"></exception>
     public void RegisterTypedCollection<T>(string collectionName, Func<T, byte[]> serializer, Func<byte[], T> deserializer, params Func<T, long>[] keyGenerators)
     {
-        if (serializer == null) throw new ArgumentNullException(nameof(serializer));
-        if (deserializer == null) throw new ArgumentNullException(nameof(deserializer));
+        ArgumentNullException.ThrowIfNull(serializer);
+        ArgumentNullException.ThrowIfNull(deserializer);
 
         if (!_pools.Any(x => x.IsConnected))
             throw new CacheException("No server is available");
@@ -416,11 +421,18 @@ public class Aggregator
 
     private IEnumerable<Item> PackTypedItems<T>(IEnumerable<T> items)
     {
+        // Resolved eagerly rather than inside the iterator below: a method containing "yield return" is
+        // entirely deferred, so this throw would otherwise only surface once the caller starts enumerating.
         if (!_packers.TryGetValue(typeof(T), out var packer))
         {
             throw new CacheException($"No collection was registered for type {typeof(T)}");
         }
 
+        return PackTypedItemsCore(items, packer);
+    }
+
+    private static IEnumerable<Item> PackTypedItemsCore<T>(IEnumerable<T> items, Func<object, Item> packer)
+    {
         foreach (var item in items)
         {
             yield return packer(item!);

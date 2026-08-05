@@ -182,26 +182,26 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         {
             // Client disconnected or operation was cancelled
             Logger.LogWarning("Cancellation requested");
-            if (stream != null)
-                await stream.WriteMessageAsync(
-                    new StatusResponse { Success = false, ErrorMessage = "Operation cancelled" },
-                    cancellationToken);
+
+            await stream.WriteMessageAsync(
+                new StatusResponse { Success = false, ErrorMessage = "Operation cancelled" },
+                cancellationToken);
         }
         catch (CacheException cacheEx)
         {
             Logger.LogError("Cache error processing client request: {Message}", cacheEx.Message);
-            if (stream != null)
-                await stream.WriteMessageAsync(
-                    new StatusResponse { Success = false, ErrorMessage = cacheEx.Message },
-                    cancellationToken);
+
+            await stream.WriteMessageAsync(
+                new StatusResponse { Success = false, ErrorMessage = cacheEx.Message },
+                cancellationToken);
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Error processing client request: {Message}", ex.Message);
-            if (stream != null)
-                await stream.WriteMessageAsync(
-                    new StatusResponse { Success = false, ErrorMessage = ex.Message },
-                    cancellationToken);
+
+            await stream.WriteMessageAsync(
+                new StatusResponse { Success = false, ErrorMessage = ex.Message },
+                cancellationToken);
         }
         finally
         {
@@ -213,9 +213,9 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
     }
 
     /// <summary>
-    /// Returns the plain network stream, or - when <see cref="ServerSettings.UseSsl"/> is enabled - a
-    /// <see cref="SslStream"/> upgraded from it via a TLS handshake. Returns null if the handshake fails, in
-    /// which case the connection has already been logged and closed.
+    ///     Returns the plain network stream, or - when <see cref="ServerSettings.UseSsl" /> is enabled - a
+    ///     <see cref="SslStream" /> upgraded from it via a TLS handshake. Returns null if the handshake fails, in
+    ///     which case the connection has already been logged and closed.
     /// </summary>
     private async Task<Stream?> EstablishStreamAsync(TcpClient client, CancellationToken cancellationToken)
     {
@@ -300,11 +300,11 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
     }
 
     /// <summary>
-    /// Streams every document currently in a collection's active version to the client, using the same
-    /// manual big-batch framing as a feed session (<see cref="FeedItemBatchSerializer"/>), terminated by an
-    /// empty batch. Validation happens before the initial acknowledgement; once that's sent, the client's
-    /// reader is committed to batch framing, so a failure from that point on can no longer be reported as a
-    /// StatusResponse - it just ends the connection, the same way a feed's own network failures do.
+    ///     Streams every document currently in a collection's active version to the client, using the same
+    ///     manual big-batch framing as a feed session (<see cref="FeedItemBatchSerializer" />), terminated by an
+    ///     empty batch. Validation happens before the initial acknowledgement; once that's sent, the client's
+    ///     reader is committed to batch framing, so a failure from that point on can no longer be reported as a
+    ///     StatusResponse - it just ends the connection, the same way a feed's own network failures do.
     /// </summary>
     private async Task ProcessStreamAllData(StreamAllDataRequest request, Stream stream, CancellationToken ct)
     {
@@ -324,7 +324,8 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         }
         catch (Exception e)
         {
-            Logger.LogError("Error while starting to stream collection {Collection}: {Message}", collectionName, e.Message);
+            Logger.LogError("Error while starting to stream collection {Collection}: {Message}", collectionName,
+                e.Message);
             await stream.WriteMessageAsync(new StatusResponse { Success = false, ErrorMessage = e.Message }, ct);
             return;
         }
@@ -335,7 +336,6 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
         var writer = new BinaryWriter(stream, Encoding.UTF8, true);
 
-        const int maxBatchSize = 1_000_000; // 1 MB per batch
         const int maxMessagesPerBatch = 5_000; // 5_000 items per batch
 
         var batch = ArrayPool<FeedItem>.Shared.Rent(maxMessagesPerBatch);
@@ -349,7 +349,7 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
                 if (batchSize >= maxMessagesPerBatch)
                 {
-                    _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize), maxBatchSize);
+                    _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize));
                     batchSize = 0;
                 }
             }
@@ -372,13 +372,14 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
     }
 
     /// <summary>
-    /// Streams every document in a collection's active version whose value at a named index equals a given
-    /// key, using the same manual big-batch framing as <see cref="ProcessStreamAllData"/>. The index name is
-    /// resolved (and validated) up front, before the acknowledgement, for the same reason collection
-    /// existence is: once the ack is sent, the client's reader is committed to batch framing and a failure
-    /// can no longer be reported as a StatusResponse.
+    ///     Streams every document in a collection's active version whose value at a named index equals a given
+    ///     key, using the same manual big-batch framing as <see cref="ProcessStreamAllData" />. The index name is
+    ///     resolved (and validated) up front, before the acknowledgement, for the same reason collection
+    ///     existence is: once the ack is sent, the client's reader is committed to batch framing and a failure
+    ///     can no longer be reported as a StatusResponse.
     /// </summary>
-    private async Task ProcessStreamBySecondaryIndex(StreamBySecondaryIndexRequest request, Stream stream, CancellationToken ct)
+    private async Task ProcessStreamBySecondaryIndex(StreamBySecondaryIndexRequest request, Stream stream,
+        CancellationToken ct)
     {
         var collectionName = request.CollectionName;
 
@@ -415,7 +416,6 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
         var writer = new BinaryWriter(stream, Encoding.UTF8, true);
 
-        const int maxBatchSize = 1_000_000; // 1 MB per batch
         const int maxMessagesPerBatch = 5_000; // 5_000 items per batch
 
         var batch = ArrayPool<FeedItem>.Shared.Rent(maxMessagesPerBatch);
@@ -423,13 +423,14 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         {
             var batchSize = 0;
 
-            foreach (var (primaryKey, data) in Store.StreamBySecondaryIndex(collectionName, request.IndexName, request.KeyValue))
+            foreach (var (primaryKey, data) in Store.StreamBySecondaryIndex(collectionName, request.IndexName,
+                         request.KeyValue))
             {
                 batch[batchSize++] = new FeedItem { Data = data, Keys = [primaryKey] };
 
                 if (batchSize >= maxMessagesPerBatch)
                 {
-                    _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize), maxBatchSize);
+                    _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize));
                     batchSize = 0;
                 }
             }
@@ -439,7 +440,8 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
             if (batchSize != 0) // if the last one was not empty, write an empty batch as the end marker
                 _batchSerializer.Serialize(writer, Array.Empty<FeedItem>());
 
-            Logger.LogInformation("Finished streaming collection {Collection} by index {Index}", collectionName, request.IndexName);
+            Logger.LogInformation("Finished streaming collection {Collection} by index {Index}", collectionName,
+                request.IndexName);
         }
         catch (Exception e)
         {
@@ -597,11 +599,18 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         await Task.Delay(200, cancellationToken);
     }
 
-    private static async IAsyncEnumerable<Item> ItemsFromChannel(Channel<FeedItem> channel)
+    private static IAsyncEnumerable<Item> ItemsFromChannel(Channel<FeedItem> channel)
     {
+        // Validated eagerly rather than inside the async iterator below: a method containing "yield return"
+        // is entirely deferred, so this throw would otherwise only surface once the caller starts enumerating.
         if (channel == null)
             throw new InvalidOperationException("Internal channel is not initialized");
 
+        return ItemsFromChannelCore(channel);
+    }
+
+    private static async IAsyncEnumerable<Item> ItemsFromChannelCore(Channel<FeedItem> channel)
+    {
         await foreach (var item in channel.Reader.ReadAllAsync()) yield return new Item(item.Data, item.Keys);
     }
 
