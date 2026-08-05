@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Security;
@@ -38,6 +39,14 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
     private X509Certificate2? _serverCertificate;
 
     private bool _disposed;
+
+    /// <summary>
+    /// Every currently-running <see cref="ClientLoop"/> task, keyed by itself (used as a concurrent set).
+    /// Tracked so <see cref="StopAsync"/> can actually wait for in-flight sessions - in particular, a feed
+    /// session still writing or aborting - to finish, instead of guessing with a fixed delay. Each entry
+    /// removes itself once its task completes, so this doesn't grow unbounded over a long server lifetime.
+    /// </summary>
+    private readonly ConcurrentDictionary<Task, byte> _activeClientLoops = new();
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -88,9 +97,12 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
                         var client = await _listener.AcceptTcpClientAsync(ct);
                         client.NoDelay = true; // Disable Nagle's algorithm for low latency
 
-
-                        // client loop
-                        _ = Task.Run(async () => { await ClientLoop(ct, client); }, ct);
+                        // client loop - tracked in _activeClientLoops so StopAsync can wait for it to
+                        // actually finish (see the field's doc comment)
+                        var clientTask = Task.Run(async () => { await ClientLoop(ct, client); }, ct);
+                        _activeClientLoops[clientTask] = 0;
+                        _ = clientTask.ContinueWith(t => _activeClientLoops.TryRemove(t, out _),
+                            TaskScheduler.Default);
                     }
 
                     Logger.LogWarning("Server stopped");
@@ -592,11 +604,28 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
         _listener?.Dispose();
 
+        // Wait for every in-flight client session to actually finish - in particular, a feed session still
+        // writing or aborting a partial version - rather than guessing with a fixed delay. A caller that
+        // tears down and immediately recreates a store at the same path (e.g. between tests) must not race
+        // a session that's still touching that same on-disk state.
+        var inFlight = _activeClientLoops.Keys.ToArray();
+        if (inFlight.Length > 0)
+            try
+            {
+                await Task.WhenAll(inFlight).WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                // Individual session failures are already logged by ClientLoop itself; a timeout here just
+                // means something is still stuck after 10s, which is itself worth knowing about.
+                Logger.LogWarning(ex,
+                    "Timed out or failed waiting for {Count} in-flight client session(s) to finish while stopping",
+                    inFlight.Length);
+            }
+
         _cts.Dispose();
 
         _disposed = true;
-
-        await Task.Delay(200, cancellationToken);
     }
 
     private static IAsyncEnumerable<Item> ItemsFromChannel(Channel<FeedItem> channel)
@@ -626,6 +655,11 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
             catch (Exception e)
             {
                 Logger.LogError(e, "Error while feeding collection {Collection}: {Message}", collectionName, e.Message);
+                // Must propagate: ProcessFeedSession awaits this task specifically to detect a failed feed and
+                // report it to the client as an error. Swallowing it here would let feederTask complete
+                // successfully even though the feed failed, causing the server to tell the client "success"
+                // for a feed that was never actually applied.
+                throw;
             }
         });
 

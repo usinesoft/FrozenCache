@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Collections.Concurrent;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Messages;
 using Microsoft.Extensions.Logging;
@@ -13,6 +14,18 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
     private readonly Dictionary<string, CollectionStore> _collectionStores = new();
 
     private Dictionary<string, CollectionMetadata> _metadataByCollection = new();
+
+    /// <summary>
+    ///     One lock per collection name, serializing its feed attempts end-to-end (from <see cref="BeginFeed" />
+    ///     through <see cref="EndFeed" /> or <see cref="AbortFeed" />). Without this, a feed that fails right
+    ///     after a client disconnect and a subsequent retry under the same version name could race each
+    ///     other's on-disk cleanup/creation of the same version directory - e.g. the retry deleting or
+    ///     recreating files the crashed attempt's own abort is still in the middle of touching.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _feedLocks = new();
+
+    private SemaphoreSlim GetFeedLock(string collectionName) =>
+        _feedLocks.GetOrAdd(collectionName, static _ => new SemaphoreSlim(1, 1));
 
 
     public DataStore(string rootPath, IndexType primaryIndexType)
@@ -300,7 +313,17 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
 
         var versionPath = Path.Combine(path, newVersion);
         if (Directory.Exists(versionPath))
-            throw new CacheException($"Version {newVersion} already exits");
+        {
+            if (IsVersionComplete(versionPath))
+                throw new CacheException($"Version {newVersion} already exits");
+
+            // A previous feed of this exact version crashed or was aborted before completing (no .complete
+            // marker) - most likely still in the middle of being cleaned up by its own abort path. Safe to
+            // remove and retry under the same name rather than fail: mirrors the same self-healing already
+            // done for incomplete versions found at startup (see Open()). Otherwise, retrying a feed shortly
+            // after a crash could spuriously race the crashed attempt's own (still in-flight) cleanup.
+            Directory.Delete(versionPath, true);
+        }
 
         var collectionStore = new CollectionStore(versionPath, collectionMetadata.Indexes.Count,
             null, collectionMetadata.FileSize, collectionMetadata.MaxItemsInFile, PrimaryIndexType);
@@ -332,50 +355,68 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
 
     public int FeedCollection(string collectionName, string newVersion, IEnumerable<Item> items)
     {
-        var collectionStore = BeginFeed(collectionName, newVersion);
-
-        var itemsCount = 0;
+        var feedLock = GetFeedLock(collectionName);
+        feedLock.Wait();
         try
         {
-            foreach (var item in items)
+            var collectionStore = BeginFeed(collectionName, newVersion);
+
+            var itemsCount = 0;
+            try
             {
-                collectionStore.StoreNewDocument(item);
-                itemsCount++;
+                foreach (var item in items)
+                {
+                    collectionStore.StoreNewDocument(item);
+                    itemsCount++;
+                }
             }
+            catch
+            {
+                AbortFeed(collectionStore);
+                throw;
+            }
+
+            EndFeed(collectionStore, collectionName);
+
+            return itemsCount;
         }
-        catch
+        finally
         {
-            AbortFeed(collectionStore);
-            throw;
+            feedLock.Release();
         }
-
-        EndFeed(collectionStore, collectionName);
-
-        return itemsCount;
     }
 
     public async Task<int> FeedCollectionAsync(string collectionName, string newVersion, IAsyncEnumerable<Item> items)
     {
-        var collectionStore = BeginFeed(collectionName, newVersion);
-
-        var itemsCount = 0;
+        var feedLock = GetFeedLock(collectionName);
+        await feedLock.WaitAsync();
         try
         {
-            await foreach (var item in items)
+            var collectionStore = BeginFeed(collectionName, newVersion);
+
+            var itemsCount = 0;
+            try
             {
-                collectionStore.StoreNewDocument(item);
-                itemsCount++;
+                await foreach (var item in items)
+                {
+                    collectionStore.StoreNewDocument(item);
+                    itemsCount++;
+                }
             }
+            catch
+            {
+                AbortFeed(collectionStore);
+                throw;
+            }
+
+            EndFeed(collectionStore, collectionName);
+
+            return itemsCount;
         }
-        catch
+        finally
         {
-            AbortFeed(collectionStore);
-            throw;
+            feedLock.Release();
         }
-
-        EndFeed(collectionStore, collectionName);
-
-        return itemsCount;
     }
 
     /// <summary>
