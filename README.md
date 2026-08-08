@@ -1,22 +1,20 @@
-# FrozenCache
+## Why Frozen Cache
+Modern systems rely on fast access to large reference datasets: product catalogs, financial referentials, pricing tables, risk parameters, and more. These collections are huge, read constantly, and updated only a few times per day. 
 
-FrozenCache is a feed-and-read cache server. Data is fed into a *collection* as an immutable,
-versioned snapshot; once fed, that version can be read concurrently by many clients but never
-mutated. Feeding a new version atomically replaces the previous one for all subsequent reads.
+In this very common scenario, traditional distributed caches are powerful—but they also carry complexity you don’t actually need.
 
-It's a custom TCP protocol plus a memory-mapped-file storage engine — not a wrapper around an
-existing database — built for workloads where data changes in full batches (a nightly load, a
-recomputed index, a snapshot from another system) and needs to be served back with very low read
-latency in between.
+Frozen Cache focuses on one specific pattern: feed the entire dataset, then read it at extreme speed until the next update. By narrowing the scope, it unlocks optimizations that general purpose caches simply cannot offer.
 
-- **Immutable, versioned data** — a version is either fully fed or not visible at all; no partial
-  writes, no read tearing, no locking on the read path.
-- **Fast reads** — memory-mapped storage, primary-key and secondary-index lookups, and streaming
-  for full-collection or filtered scans.
-- **AOT-published server** — starts fast, small footprint; published as a self-contained native
-  executable for win-x64 and linux-x64 by CI.
-- **.NET client** with connection pooling, multi-replica fan-out, and an optional local LRU cache
-  (`CacheClient`).
+What makes it different
+-	**Lock free access**, by design Many distributed caches fight hard to avoid locks—some even run single threaded to guarantee it. Frozen Cache doesn’t need tricks: when the whole dataset is replaced at once, reads are naturally lock free. Every lookup is instantaneous.
+-	Immutable, **ultra optimized indexes** Because data never changes between updates, indexes can be built once and kept in memory as highly tuned, immutable structures. No incremental updates, no fragmentation, no performance drift.
+-	**Effortless replication** Replication becomes trivial: feed all replicas at the same time, then let them serve traffic independently. No dynamic synchronization, no consistency issues, no replication storms.
+-	**Guaranteed consistency** There is always exactly one active version of the dataset. A new version becomes visible only after it has been fully loaded, validated, and indexed—using atomic operations, not locks. Clients never see partial updates or inconsistent states.
+
+## The result
+
+A cache that is **blazing fast**, predictable, and operationally simple, precisely because it doesn’t try to solve every caching problem. For workloads built around large, immutable datasets with periodic refreshes, **Frozen Cache is not just an optimization—it’s the right tool**.
+
 
 ## Quick start
 
