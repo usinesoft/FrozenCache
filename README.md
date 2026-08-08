@@ -15,6 +15,75 @@ What makes it different
 
 A cache that is **blazing fast**, predictable, and operationally simple, precisely because it doesn’t try to solve every caching problem. For workloads built around large, immutable datasets with periodic refreshes, **Frozen Cache is not just an optimization—it’s the right tool**.
 
+## A Conservative Design Choice
+Frozen Cache takes a deliberately conservative stance on one core aspect: object serialization. All objects are stored as **raw byte[] blobs**, and the server makes **zero assumptions about the serialization format**. JSON, Protobuf, MessagePack, custom binary—it's entirely up to the client.
+
+This keeps the server simple, predictable, and future proof. No hidden coupling. No forced serialization strategy. No surprises.
+
+## Some Radical Design Choices
+### Where should the data live?
+Most distributed caches give an instinctive answer: in memory. But this answer comes with consequences:
+-	You must have enough RAM to hold the entire dataset.
+-	Large datasets require sharding, which complicates architecture and operations.
+-	Memory pressure becomes a constant concern.
+
+Modern servers equipped with NVMe SSDs open a different path—one that Frozen Cache embraces:
+-	Store the data on disk, as a sequence of memory mapped files
+-	Store the indexes in memory
+
+This hybrid approach delivers the best of both worlds.
+
+#### Why memory mapped files?
+Memory mapped files behave very differently from traditional stream based file access:
+-	Much faster reads — often up to 10× faster, depending on block size
+-	Automatic caching — once a page is mapped into physical memory, the OS keeps it until memory pressure requires eviction
+-	Zero code for cache management — the OS effectively provides a built in LRU cache
+-	Predictable performance — no manual buffering, no custom paging logic
+
+In practice, memory mapped files give you near RAM performance with disk level capacity.
+
+### What data type should indexes use?
+Most systems use multiple index types: strings, integers, dates, floats. It feels natural—but it introduces complexity:
+-	Variable size values slow down lookups
+-	Storage becomes fragmented
+-	Index structures become harder to optimize
+
+Frozen Cache takes a more radical approach:
+
+**All index values are int64**.
+
+A single, fixed size type that matches the CPU word size. This yields:
+-	Fastest possible lookups
+-	Fixed size index blocks
+-	Simplified memory layout
+-	Highly optimized CPU level operations
+
+#### How do we convert everything to int64?
+Most data types map naturally:
+-	Timestamps → ticks
+-	Floats → multiply by a fixed precision
+-	Booleans / Enums → direct cast
+-	Numeric identifiers → direct cast
+
+Strings are the only challenge. Frozen Cache uses a double hashing algorithm that produces an almost unique 64 bit representation.
+
+Collision probability is extremely low—and even if it happens, **data integrity is never at risk**:
+-	The real attribute value is stored inside the serialized object
+-	A collision simply means the lookup returns one extra candidate object
+-	The client still receives correct data
+
+This keeps indexes fast, compact, and predictable.
+## The Result
+By combining conservative choices (client controlled serialization) with radical ones (memory mapped storage, uniform int64 indexing), Frozen Cache achieves a rare balance:
+-	Simplicity
+-	Predictability
+-	Extreme performance
+-	Operational ease
+
+>It’s not a general purpose cache. It’s a cache engineered for a very specific, very demanding workload—and it excels precisely because of these design decisions.
+
+
+
 
 ## Quick start
 
