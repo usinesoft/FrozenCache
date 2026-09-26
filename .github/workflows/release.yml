@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 1.2.0). The tag will be v<version>.'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # create the tag and the release
+  actions: read     # find the build run and download its artifacts
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ inputs.version }}
+      TAG: v${{ inputs.version }}
+
+    steps:
+    - name: Validate version
+      run: |
+        if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+          echo "::error::Version '$VERSION' is not a valid semantic version (e.g. 1.2.0 or 1.2.0-beta.1)"
+          exit 1
+        fi
+        if gh api "repos/$GH_REPO/git/ref/tags/$TAG" --silent 2>/dev/null; then
+          echo "::error::Tag $TAG already exists"
+          exit 1
+        fi
+
+    # Release the artifacts of the latest successful build on main, and tag the commit that build was made from,
+    # so the tag and the binaries always match.
+    - name: Find latest successful build
+      id: build
+      run: |
+        read -r RUN_ID HEAD_SHA < <(gh run list --workflow dotnet-desktop.yml --branch main --event push \
+          --status success --limit 1 --json databaseId,headSha --jq '.[0] | "\(.databaseId) \(.headSha)"')
+        if [ -z "$RUN_ID" ]; then
+          echo "::error::No successful build of main found"
+          exit 1
+        fi
+        echo "Using build run $RUN_ID (commit $HEAD_SHA)"
+        echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+        echo "sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+    - name: Download build artifacts
+      run: gh run download ${{ steps.build.outputs.run_id }} --dir artifacts
+
+    - name: Package artifacts
+      run: |
+        # upload-artifact does not preserve Unix permissions; restore the executable bit on the Linux binaries
+        chmod +x artifacts/linux-x64-binaries/FrozenCache/FrozenCache artifacts/linux-x64-binaries/PerTest/PerTest
+        mkdir packages
+        for dir in artifacts/*/; do
+          name=$(basename "$dir")
+          name=${name%-binaries}
+          (cd "$dir" && zip -r -q "$GITHUB_WORKSPACE/packages/FrozenCache-$VERSION-$name.zip" .)
+        done
+        ls -l packages
+
+    - name: Create release
+      run: |
+        gh release create "$TAG" packages/*.zip \
+          --target ${{ steps.build.outputs.sha }} \
+          --title "FrozenCache $VERSION" \
+          --generate-notes \
+          ${{ inputs.prerelease && '--prerelease' || '' }}
