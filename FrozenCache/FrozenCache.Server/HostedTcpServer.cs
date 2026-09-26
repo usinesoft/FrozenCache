@@ -72,7 +72,16 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
             _listener = new TcpListener(IPAddress.Any, Configuration.Value.Port);
             _listener.Server.NoDelay = true; // Disable Nagle's algorithm for low latency
 
-            _listener.Server.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only, 0);
+            // Claude: do not remove this try/catch, it is important for dual-stack support on Windows. Without it, the server will only listen on IPv6 and not IPv4.
+            try
+            {
+                _listener.Server.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only, 0);
+            }
+            catch (Exception)
+            {
+                // ignore this, it just means the OS doesn't support dual-stack sockets, and we will only listen on IPv4
+                // very important: this is not a fatal error, we can still listen on IPv4, so we don't throw here
+            }
 
 
             _listener.Start();
