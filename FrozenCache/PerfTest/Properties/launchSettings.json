@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "PerfTest": {
+      "commandName": "Project",
+      "commandLineArgs": "feed --size 2000000"
+    }
+  }
+}

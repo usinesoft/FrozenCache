@@ -62,8 +62,8 @@ jobs:
     - name: Publish FrozenCache (${{ matrix.rid }})
       run: dotnet publish FrozenCache/FrozenCache/FrozenCache.csproj -c Release -r ${{ matrix.rid }} -f net10.0 --self-contained -o publish/${{ matrix.rid }}/FrozenCache
 
-    - name: Publish PerTest (${{ matrix.rid }})
-      run: dotnet publish FrozenCache/PerTest/PerTest.csproj -c Release -r ${{ matrix.rid }} -f net10.0 --self-contained -o publish/${{ matrix.rid }}/PerTest
+    - name: Publish PerfTest (${{ matrix.rid }})
+      run: dotnet publish FrozenCache/PerfTest/PerfTest.csproj -c Release -r ${{ matrix.rid }} -f net10.0 --self-contained -o publish/${{ matrix.rid }}/PerfTest
 
     - name: Upload ${{ matrix.rid }} binaries
       uses: actions/upload-artifact@v4
@@ -92,8 +92,8 @@ jobs:
     - name: Publish FrozenCache (portable)
       run: dotnet publish FrozenCache/FrozenCache/FrozenCache.csproj -c Release -f net10.0 -p:PublishAot=false -p:UseAppHost=false -o publish/portable/FrozenCache
 
-    - name: Publish PerTest (portable)
-      run: dotnet publish FrozenCache/PerTest/PerTest.csproj -c Release -f net10.0 -p:PublishAot=false -p:UseAppHost=false -o publish/portable/PerTest
+    - name: Publish PerfTest (portable)
+      run: dotnet publish FrozenCache/PerfTest/PerfTest.csproj -c Release -f net10.0 -p:PublishAot=false -p:UseAppHost=false -o publish/portable/PerfTest
 
     - name: Upload portable binaries
       uses: actions/upload-artifact@v4

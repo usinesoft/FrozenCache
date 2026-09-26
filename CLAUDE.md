@@ -50,8 +50,8 @@ CacheClient        <- client library (connection pooling, aggregation across rep
 ProfilingTool       <- perf-testing console app; hosts FrozenCache.Server's HostedTcpServer in-process and feeds
                        data through the real TCP path. Depends on CacheClient, FrozenCache.Server, Messages,
                        PersistentStore.
-PerTest             <- another standalone perf/load console app driving a running server on localhost:5123.
-                       Depends on CacheClient, Messages only.
+PerfTest            <- another standalone perf/load console app driving a running server (localhost:5123 by
+                       default, see --server). Depends on CacheClient, Messages only.
 UnitTests           <- NUnit tests; depends on CacheClient, FrozenCache.Server, Messages, PersistentStore -
                        deliberately not on the FrozenCache exe itself.
 ```

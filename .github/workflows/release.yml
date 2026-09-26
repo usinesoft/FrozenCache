@@ -60,7 +60,7 @@ jobs:
     - name: Package artifacts
       run: |
         # upload-artifact does not preserve Unix permissions; restore the executable bit on the Linux binaries
-        chmod +x artifacts/linux-x64-binaries/FrozenCache/FrozenCache artifacts/linux-x64-binaries/PerTest/PerTest
+        chmod +x artifacts/linux-x64-binaries/FrozenCache/FrozenCache artifacts/linux-x64-binaries/PerfTest/PerfTest
         mkdir packages
         for dir in artifacts/*/; do
           name=$(basename "$dir")
