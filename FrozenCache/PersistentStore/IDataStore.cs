@@ -1,5 +1,6 @@
 ﻿using Messages;
 using Microsoft.Extensions.Logging;
+using PersistentStore.Statistics;
 
 namespace PersistentStore;
 
@@ -81,6 +82,13 @@ public interface IDataStore
     public Task<int> FeedCollectionAsync(string collectionName, string newVersion, IAsyncEnumerable<Item> items);
 
     public CollectionMetadata? GetCollectionMetadata(string collectionName);
+
+    /// <summary>
+    /// Per-minute statistics of the lookups by primary key over the last 24 hours, oldest first. Minutes without
+    /// lookups are absent. The history is kept across versions of the collection.
+    /// </summary>
+    /// <returns>null if the collection does not exist</returns>
+    public MonitoringItem[]? GetMonitoring(string collectionName);
 
 }
 

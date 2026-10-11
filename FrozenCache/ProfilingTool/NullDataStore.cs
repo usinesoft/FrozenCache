@@ -2,6 +2,7 @@
 using Messages;
 using Microsoft.Extensions.Logging;
 using PersistentStore;
+using PersistentStore.Statistics;
 
 namespace ProfilingTool;
 
@@ -78,6 +79,11 @@ public class NullDataStore : IDataStore
     }
 
     public CollectionMetadata? GetCollectionMetadata(string collectionName)
+    {
+        throw new NotImplementedException();
+    }
+
+    public MonitoringItem[]? GetMonitoring(string collectionName)
     {
         throw new NotImplementedException();
     }

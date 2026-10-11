@@ -1,7 +1,9 @@
-﻿using System.IO.MemoryMappedFiles;
+﻿using System.Diagnostics;
+using System.IO.MemoryMappedFiles;
 using System.Runtime.InteropServices;
 using Messages;
 using Microsoft.Extensions.Logging;
+using PersistentStore.Statistics;
 
 namespace PersistentStore;
 
@@ -90,10 +92,17 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
     /// <param name="binaryFileDataSize"></param>
     /// <param name="maxDocumentsInEachFile"></param>
     /// <param name="primaryIndexType">Dictionary or Ordered</param>
+    /// <param name="monitor">
+    /// Receives lookup statistics. Pass the collection's shared instance so that statistics survive new
+    /// versions; a private one is created if null.
+    /// </param>
     public CollectionStore(string storagePath, int numberOfKeys, ILogger? logger,
         int binaryFileDataSize = Consts.DefaultBinaryFileDataSize,
-        int maxDocumentsInEachFile = Consts.DefaultMaxDocumentsInOneFile, IndexType primaryIndexType = IndexType.Dictionary)
+        int maxDocumentsInEachFile = Consts.DefaultMaxDocumentsInOneFile, IndexType primaryIndexType = IndexType.Dictionary,
+        CollectionMonitor? monitor = null)
     {
+        Monitor = monitor ?? new CollectionMonitor();
+
         _logger = logger;
 
         _numberOfKeys = numberOfKeys;
@@ -151,6 +160,11 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
             ReadMap();
     }
 
+
+    /// <summary>
+    /// Per-minute statistics of the lookups by primary key (<see cref="GetByFirstKey"/>).
+    /// </summary>
+    public CollectionMonitor Monitor { get; }
 
     internal string StoragePath { get; }
 
@@ -483,6 +497,8 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 
     public List<byte[]> GetByFirstKey(long keyValue)
     {
+        var start = Stopwatch.GetTimestamp();
+
         if (!_isReadOnly)
             throw new InvalidOperationException(ErrorMessages.CollectionStoreNotSealed);
 
@@ -492,6 +508,8 @@ public sealed class CollectionStore : IAsyncDisposable, IDisposable
 
         foreach (var indexEntry in entries)
             result.Add(LoadDocument(indexEntry));
+
+        Monitor.Record(result.Count, Stopwatch.GetElapsedTime(start));
 
         return result;
     }

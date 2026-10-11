@@ -2,6 +2,7 @@
 using Messages;
 using Microsoft.Extensions.Logging;
 using PersistentStore;
+using PersistentStore.Statistics;
 
 namespace UnitTests;
 
@@ -100,5 +101,10 @@ public class NullDataStore : IDataStore
     public CollectionMetadata? GetCollectionMetadata(string collectionName)
     {
         return new CollectionMetadata("testCollection", "id");
+    }
+
+    public MonitoringItem[]? GetMonitoring(string collectionName)
+    {
+        return [];
     }
 }

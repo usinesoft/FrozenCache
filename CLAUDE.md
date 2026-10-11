@@ -99,7 +99,9 @@ tests and tools can depend on the server engine without dragging in the web host
 
 - One `IHostedService` runs a raw `TcpListener` alongside the normal ASP.NET Core HTTP pipeline (registered by
   `FrozenCache/Program.cs`, which is the only place `FrozenCache.Server` is hosted inside ASP.NET Core). HTTP is
-  used only for `/health` and `GET /collections`; all data operations (create/drop
+  used only for `/health`, `GET /collections` and `GET /collections/{name}/monitoring` (per-minute lookup
+  statistics from `PersistentStore/Statistics/CollectionMonitor`, owned per collection by `DataStore` so they
+  survive new versions); all data operations (create/drop
   collection, feed, query) go over the custom TCP protocol on the port from `ServerSettings.Port`
   (`appsettings.json` → `ServerSettings:Port`, default 5123).
 - Each accepted TCP connection runs its own `ClientLoop` task reading one `IMessage` at a time and dispatching

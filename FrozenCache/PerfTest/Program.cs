@@ -93,17 +93,26 @@ namespace PerfTest
 
             Console.WriteLine("Connected to server");
 
-            if (action == "feed")
+            try
             {
-                await FeedData(connector, collection, size);
+                if (action == "feed")
+                {
+                    await FeedData(connector, collection, size);
+                }
+                else if (action == "stream")
+                {
+                    await StreamData(connector, collection);
+                }
+                else
+                {
+                    await ReadData(connector, collection);
+                }
             }
-            else if (action == "stream")
+            catch (CacheException e)
             {
-                await StreamData(connector, collection);
-            }
-            else
-            {
-                await ReadData(connector, collection);
+                // protocol-level failures (e.g. an SSL mismatch) are expected operator errors, not crashes
+                Console.WriteLine(e.Message);
+                return 1;
             }
 
             return 0;

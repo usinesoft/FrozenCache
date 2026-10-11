@@ -86,6 +86,21 @@ internal static class Program
             return Results.Ok(collections);
         });
 
+        // Per-minute lookup statistics of a collection over the last 24 hours
+        collectionsApi.MapGet("/{name}/monitoring", (string name, IDataStore dataStore) =>
+        {
+            var history = dataStore.GetMonitoring(name);
+            if (history == null)
+                return Results.NotFound();
+
+            var minutes = history
+                .Select(m => new MinuteStatistics(m.Timestamp, m.Calls, m.RetrievedObjects,
+                    m.Calls == 0 ? 0 : TimeSpan.FromTicks(m.TotalTicks).TotalMicroseconds / m.Calls))
+                .ToArray();
+
+            return Results.Ok(new CollectionMonitoring(name, minutes));
+        });
+
         // Default health checks
         app.MapHealthChecks("/health");
 
@@ -95,8 +110,22 @@ internal static class Program
 }
 
 
+/// <summary>
+/// Response of <c>GET /collections/{name}/monitoring</c>.
+/// </summary>
+/// <param name="Collection">Collection name.</param>
+/// <param name="Minutes">One entry per minute with at least one lookup, oldest first; the last one may be partial.</param>
+internal sealed record CollectionMonitoring(string Collection, MinuteStatistics[] Minutes);
+
+/// <param name="Minute">Start of the minute, UTC.</param>
+/// <param name="Calls">Number of lookups by primary key.</param>
+/// <param name="RetrievedObjects">Number of objects returned by those lookups.</param>
+/// <param name="AverageMicroseconds">Average server-side duration of one lookup.</param>
+internal sealed record MinuteStatistics(DateTime Minute, long Calls, long RetrievedObjects, double AverageMicroseconds);
+
 [JsonSerializable(typeof(CollectionsDescription))]
 [JsonSerializable(typeof(CollectionInformation))]
+[JsonSerializable(typeof(CollectionMonitoring))]
 internal partial class AppJsonSerializerContext : JsonSerializerContext
 {
 

@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Messages;
 using Microsoft.Extensions.Logging;
+using PersistentStore.Statistics;
 
 namespace PersistentStore;
 
@@ -26,6 +27,15 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
 
     private SemaphoreSlim GetFeedLock(string collectionName) =>
         _feedLocks.GetOrAdd(collectionName, static _ => new SemaphoreSlim(1, 1));
+
+    /// <summary>
+    ///     Lookup statistics by collection name. Owned here rather than by <see cref="CollectionStore" /> (which
+    ///     exists once per version) so that the history survives new feeds.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, CollectionMonitor> _monitors = new();
+
+    private CollectionMonitor GetMonitor(string collectionName) =>
+        _monitors.GetOrAdd(collectionName, static _ => new CollectionMonitor());
 
 
     public DataStore(string rootPath, IndexType primaryIndexType)
@@ -196,6 +206,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         }
 
         _collectionStores.Remove(name);
+        _monitors.TryRemove(name, out _);
 
         LoadCollectionsMetadata();
     }
@@ -265,7 +276,7 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
             if (completeVersionsDirectories.Count > 0)
                 _collectionStores[metadata.Name] =
                     new CollectionStore(completeVersionsDirectories[^1], metadata.Indexes.Count, logger,
-                        metadata.FileSize, metadata.MaxItemsInFile, PrimaryIndexType);
+                        metadata.FileSize, metadata.MaxItemsInFile, PrimaryIndexType, GetMonitor(metadata.Name));
 
             logger?.LogInformation("Collection {CollectionName} opened with last version {LastVersion}",
                 metadata.Name, lastVersion);
@@ -326,7 +337,8 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
         }
 
         var collectionStore = new CollectionStore(versionPath, collectionMetadata.Indexes.Count,
-            null, collectionMetadata.FileSize, collectionMetadata.MaxItemsInFile, PrimaryIndexType);
+            null, collectionMetadata.FileSize, collectionMetadata.MaxItemsInFile, PrimaryIndexType,
+            GetMonitor(collectionName));
 
         return collectionStore;
     }
@@ -467,6 +479,15 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
     public CollectionMetadata? GetCollectionMetadata(string collectionName)
     {
         return _metadataByCollection.GetValueOrDefault(collectionName);
+    }
+
+    public MonitoringItem[]? GetMonitoring(string collectionName)
+    {
+        if (!_metadataByCollection.ContainsKey(collectionName))
+            return null;
+
+        // a collection that was never fed or queried has no monitor yet
+        return _monitors.TryGetValue(collectionName, out var monitor) ? monitor.GetHistory() : [];
     }
 
     public async ValueTask DisposeAsync()

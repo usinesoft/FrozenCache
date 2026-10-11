@@ -224,7 +224,7 @@ variables (`Section__Key`, e.g. `ServerSettings__Port=6000`).
 | `ServerSettings:SslCertificatePassword` | — | Password for the PFX file. |
 | `PathSettings:DataPath` | `C:\FrozenCache\data` | Root directory for collections. `data` (relative to the executable) if unset. |
 | `PathSettings:LogPath` | `C:\FrozenCache\logs` | Directory for daily rolling log files (7 kept). `logs` if unset. |
-| `Kestrel:Endpoints` | — | HTTP endpoint for `/health` and `/collections`. **Must use a different port than `ServerSettings:Port`.** |
+| `Kestrel:Endpoints` | — | HTTP endpoint for `/health`, `/collections` and monitoring. **Must use a different port than `ServerSettings:Port`.** |
 
 Relative paths are resolved against the executable's directory: the server sets its working
 directory to its own location at startup, because Windows services otherwise start in
@@ -528,8 +528,38 @@ The server also exposes a small HTTP API on the Kestrel endpoint (not on the TCP
 |---|---|
 | `GET /health` | Returns `Healthy` when the server is up. |
 | `GET /collections` | JSON array describing each collection: name, keys, item count, size in bytes, last version, segment file limits. |
+| `GET /collections/{name}/monitoring` | Per-minute statistics of lookups by primary key over the last 24 hours. `404` if the collection doesn't exist. |
 
 All data operations (create, feed, query, drop) go over the TCP protocol.
+
+### Monitoring
+
+```bash
+curl http://localhost:<http-port>/collections/products/monitoring
+```
+
+```json
+{
+  "collection": "products",
+  "minutes": [
+    { "minute": "2026-10-11T18:51:00Z", "calls": 23200, "retrievedObjects": 23200, "averageMicroseconds": 0.23 },
+    { "minute": "2026-10-11T18:52:00Z", "calls": 46400, "retrievedObjects": 46400, "averageMicroseconds": 2.17 }
+  ]
+}
+```
+
+| Field | Description |
+|---|---|
+| `minute` | Start of the minute, UTC. |
+| `calls` | Lookups by primary key during that minute. |
+| `retrievedObjects` | Documents returned by those lookups (lower than `calls` when keys are missing, higher with non-unique keys). |
+| `averageMicroseconds` | Average server-side time of one lookup, excluding network and serialization. |
+
+- One entry per minute that had at least one lookup, oldest first; idle minutes are absent. The
+  last entry is the current, still-growing minute.
+- The history is kept per collection across feeds, in memory: it starts over when the server
+  restarts or the collection is dropped.
+- Only primary-key lookups are measured; streaming (`StreamAllData`, secondary indexes) is not.
 
 ---
 
