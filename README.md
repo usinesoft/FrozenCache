@@ -651,11 +651,28 @@ Run from `FrozenCache/` (the directory containing `FrozenCache.sln`):
 
 ```bash
 dotnet build FrozenCache.sln
-dotnet test UnitTests/UnitTests.csproj
-dotnet test UnitTests/UnitTests.csproj --filter "FullyQualifiedName~IntegrationTest"
+dotnet test --project UnitTests/UnitTests.csproj
+dotnet test --project UnitTests/UnitTests.csproj --filter "FullyQualifiedName~IntegrationTest"
 ```
 
-Tests use NUnit. The server is published with Native AOT:
+Tests use NUnit on [Microsoft.Testing.Platform](https://learn.microsoft.com/dotnet/core/testing/microsoft-testing-platform-intro)
+(MTP). The `global.json` at the repository root switches `dotnet test` to MTP mode, which takes
+`--project`/`--solution` rather than a positional path. The test project is also a standalone
+executable (`UnitTests/bin/Debug/net10.0/UnitTests`) accepting the same options, such as `--filter`.
+
+Code coverage uses [Coverlet](https://github.com/coverlet-coverage/coverlet)'s MTP integration.
+From the repository root:
+
+```bash
+dotnet test --project FrozenCache/UnitTests/UnitTests.csproj --coverlet \
+  --coverlet-output-format opencover --coverlet-output-format cobertura \
+  --coverlet-file-prefix UnitTests --results-directory coverage
+```
+
+This writes OpenCover and Cobertura reports to `coverage/`. CI collects coverage on every build
+and publishes it as the `coverage` artifact.
+
+The server is published with Native AOT:
 
 ```bash
 dotnet publish FrozenCache/FrozenCache.csproj -c Release -r linux-x64 -f net10.0 --self-contained

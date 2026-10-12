@@ -164,6 +164,8 @@ _TeamCity*
 coverage*.json
 coverage*.xml
 coverage*.info
+# reports written by "dotnet test ... --coverlet --results-directory coverage"
+/coverage/
 
 # Visual Studio code coverage results
 *.coverage

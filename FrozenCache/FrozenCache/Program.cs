@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using FrozenCache.Server;
 using Messages;
+using Microsoft.Extensions.Options;
 using PersistentStore;
 using Serilog;
 
@@ -71,6 +72,25 @@ internal static class Program
 
         var app = builder.Build();
 
+        // Checked after Build() so that the message also reaches the log file (there is no console when running
+        // as a service), but before opening the store or binding any port.
+        var tcpPort = app.Services.GetRequiredService<IOptions<ServerSettings>>().Value.Port;
+        var conflictingUrls = HttpEndpoints.UsingPort(app.Configuration, tcpPort);
+        if (conflictingUrls.Count > 0)
+        {
+            app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("FrozenCache.Startup").LogCritical(
+                "Configuration error: the HTTP endpoint {HttpUrls} uses port {Port}, which is also ServerSettings:Port, " +
+                "the port of the cache TCP protocol. Local clients would reach the HTTP server instead of the cache. " +
+                "Change Kestrel:Endpoints or ServerSettings:Port in appsettings.json so that they differ. " +
+                "The server will not start.",
+                string.Join(", ", conflictingUrls), tcpPort);
+
+            // flushes the log file
+            app.DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+            Environment.ExitCode = 1;
+            return;
+        }
 
         var logger = app.Services.GetService<ILogger<DataStore>>();
 

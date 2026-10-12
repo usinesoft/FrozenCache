@@ -27,8 +27,19 @@ jobs:
       with:
         dotnet-version: 10.0.x
 
+    # MTP mode of dotnet test, enabled by global.json at the repository root. Coverage (coverlet.MTP) is only
+    # collected for Debug: optimized Release code maps poorly to source lines.
     - name: Execute unit tests
-      run: dotnet test FrozenCache/UnitTests/UnitTests.csproj -c ${{ matrix.configuration }}
+      run: >-
+        dotnet test --project FrozenCache/UnitTests/UnitTests.csproj -c ${{ matrix.configuration }}
+        ${{ matrix.configuration == 'Debug' && '--coverlet --coverlet-output-format opencover --coverlet-output-format cobertura --coverlet-file-prefix UnitTests --results-directory coverage' || '' }}
+
+    - name: Upload coverage report
+      if: matrix.configuration == 'Debug'
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage
+        path: coverage/*.xml
 
   publish-aot:
     needs: test

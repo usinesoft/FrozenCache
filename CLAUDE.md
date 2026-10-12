@@ -18,13 +18,28 @@ Always run these from `FrozenCache/FrozenCache/` (the directory containing the `
 
 ```
 dotnet build FrozenCache.sln
-dotnet test UnitTests/UnitTests.csproj
-dotnet test UnitTests/UnitTests.csproj --filter "FullyQualifiedName~IntegrationTest"
-dotnet test UnitTests/UnitTests.csproj --filter "Name=FeedCollection"
+dotnet test --project UnitTests/UnitTests.csproj
+dotnet test --project UnitTests/UnitTests.csproj --filter "FullyQualifiedName~IntegrationTest"
+dotnet test --project UnitTests/UnitTests.csproj --filter "Name=FeedCollection"
 dotnet run --project FrozenCache/FrozenCache.csproj
 ```
 
 Tests use NUnit (not xUnit/MSTest) — filter with `Name=`, `FullyQualifiedName~`, or `TestCategory=` accordingly.
+Tests run on Microsoft.Testing.Platform (MTP), not VSTest: `UnitTests` sets `EnableNUnitRunner` and builds as an
+executable, and the repo-root `global.json` switches `dotnet test` to MTP mode, which requires `--project` (or
+`--solution`) instead of a positional path. NUnit's MTP runner keeps the `--filter` syntax above; it does not support
+MTP's `--treenode-filter`. The built `UnitTests` executable can also be run directly with the same options.
+
+Coverage uses `coverlet.MTP` (`coverlet.collector`/`coverlet.msbuild` don't work under MTP). From the repo root:
+
+```
+dotnet test --project FrozenCache/UnitTests/UnitTests.csproj --coverlet --coverlet-output-format opencover --coverlet-output-format cobertura --coverlet-file-prefix UnitTests --results-directory coverage
+```
+
+Reports land in `coverage/` (git-ignored) as `UnitTests.coverage.<format>.<timestamp>.xml` — coverlet appends the
+timestamp even with a prefix, so consumers must use a wildcard (e.g. `coverage/*.opencover.*.xml`). OpenCover is the
+format SonarQube's C# analyzer reads. Only assemblies referenced by `UnitTests` are measured, so the `FrozenCache`
+exe and the tools are absent. CI collects coverage on the Debug leg and uploads it as the `coverage` artifact.
 Test targets `net10.0`; other projects multi-target `net8.0;net10.0`. `PersistentStore` and `ProfilingTool` use
 `AllowUnsafeBlocks` (memory-mapped file pointer access).
 
