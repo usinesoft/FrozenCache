@@ -21,6 +21,7 @@ around an existing database. Server and client are .NET (server: .NET 10, client
   - [Keys and `KeyProducers`](#keys-and-keyproducers)
 - [Versions and consistency](#versions-and-consistency)
 - [HTTP endpoints](#http-endpoints)
+  - [Dashboard](#dashboard)
 - [Deployment](#deployment)
 - [Tools](#tools)
 - [Building and testing](#building-and-testing)
@@ -161,6 +162,8 @@ in TLS.
 ### Prerequisites
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download) to build.
+- [Node.js](https://nodejs.org/) 20.19+ or 22.12+ with npm, to build the server's
+  [dashboard](#dashboard) (or build with `-p:SkipDashboard=true` to leave it out).
 - To run a prebuilt release, see [Deployment](#deployment).
 
 ### 1. Run the server
@@ -240,7 +243,7 @@ The client library (`CacheClient`) has three layers:
 |---|---|
 | `Aggregator` | Application code. Talks to one or more replicas, handles typed data, reconnection, replica selection and an optional local cache. |
 | `ConnectorPool` | A pool of connections to one server with a background watchdog. Used internally by `Aggregator`. |
-| `Connector` | A single TCP connection; raw `byte[]` API. Useful for tools, admin tasks and secondary-index queries. |
+| `Connector` | A single TCP connection; raw `byte[]` API. Useful for tools and admin tasks. |
 
 ### Aggregator with typed data
 
@@ -329,6 +332,35 @@ Raw bytes are also available when you want to deserialize yourself:
 ```csharp
 List<byte[]> raw = await aggregator.QueryRawDataByPrimaryKey("products", 42);
 ```
+
+#### Query by secondary key
+
+```csharp
+// every product of category 12, in memory
+List<Product> inCategory = await aggregator.QueryBySecondaryKey<Product>("products", "categoryId", 12);
+
+// streamed in batches: for large results, never held in memory as a whole
+await foreach (var product in aggregator.StreamBySecondaryKey<Product>("products", "categoryId", 12))
+    Console.WriteLine(product.Name);
+
+// the key value is converted like the registered key generator
+var current = await aggregator.QueryBySecondaryKey<Product>("products", "validFrom",
+    new DateOnly(2026, 1, 1).FromDateOnly());
+
+// raw data paired with the primary key
+await foreach (var (id, data) in aggregator.StreamRawDataBySecondaryKey("products", "categoryId", 12))
+    Console.WriteLine($"{id}: {data.Length} bytes");
+```
+
+- The index name is one declared with `DeclareCollection`. An unknown collection or index throws a
+  `CacheException`.
+- Results come from one replica, preferring those on the latest version. If it fails before
+  returning anything, the query moves to another replica; `QueryBySecondaryKey` also restarts on
+  another replica after a failure part way through. A stream that has already returned results
+  propagates the failure instead, since a retry would return them twice.
+- A stream can be stopped early (`break`, cancellation): its connection, which still holds unread
+  results, is replaced rather than reused.
+- Secondary-key queries don't go through the local cache.
 
 #### Enable a local cache
 
@@ -433,7 +465,7 @@ public class Product
 
 `Connector` is a single connection with a raw `byte[]` API. It is not thread-safe: use one
 connector per concurrent operation. Unlike `Aggregator`, it lets you choose the version name and
-exposes secondary-index queries and full-collection streaming.
+exposes full-collection streaming.
 
 ```csharp
 using CacheClient;
@@ -468,17 +500,6 @@ await foreach (var (primaryKey, data) in connector.StreamAllData("orders"))
     Console.WriteLine($"order {primaryKey}");
 
 static byte[] Encode(object value) => System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(value);
-```
-
-Secondary-index queries are not exposed by `Aggregator` yet. To get typed results, stream through
-a `Connector` and deserialize yourself:
-
-```csharp
-await foreach (var (_, data) in connector.StreamBySecondaryIndex("products", "categoryId", 12))
-{
-    var product = MessagePackSerializer.Deserialize<Product>(data);
-    // ...
-}
 ```
 
 Other `Connector` operations: `GetCollectionsDescription()`, `DropCollection(name)`, `Ping()`.
@@ -526,11 +547,32 @@ The server also exposes a small HTTP API on the Kestrel endpoint (not on the TCP
 
 | Endpoint | Description |
 |---|---|
+| `GET /dashboard` | The [dashboard](#dashboard). |
 | `GET /health` | Returns `Healthy` when the server is up. |
 | `GET /collections` | JSON array describing each collection: name, keys, item count, size in bytes, last version, segment file limits. |
 | `GET /collections/{name}/monitoring` | Per-minute statistics of lookups by primary key over the last 24 hours. `404` if the collection doesn't exist. |
 
 All data operations (create, feed, query, drop) go over the TCP protocol.
+
+### Dashboard
+
+`http://<server>:<http-port>/dashboard` shows one card per collection: its name, object count,
+active version, size, average object size, primary key, secondary indexes and segment file
+limits, plus two column charts over the selected period: lookups, and average lookup duration.
+Each column covers 1 minute over 1 hour, 5 minutes over 6 hours, and 15 minutes over 24 hours;
+its duration is averaged over all the lookups in it. A period without lookups has no column.
+Hovering a chart, or focusing it and using the arrow keys, reads each column; "Show data" lists
+the same values as a table. The page refreshes every 15 seconds and follows the system's light or
+dark mode.
+
+The dashboard is an Angular application in `FrozenCache/Dashboard`. Building the server builds it
+(when its sources changed) and ships it in a `dashboard` folder next to the executable, in build
+and publish output alike. To work on it with live reload, run the server, then:
+
+```bash
+cd FrozenCache/Dashboard
+npm start    # http://localhost:4200/dashboard/, proxying API calls to the server on localhost:5213
+```
 
 ### Monitoring
 
@@ -621,22 +663,31 @@ paths.
 Load test against a running server.
 
 ```
-PerfTest [feed|read|stream] [options]
+PerfTest [feed|read|stream|secondary] [options]
 
-  feed     create the collection (if needed) and feed a new version named yyyyMMdd-HHmmss
-  read     query random primary keys in batches of 1, 5, 10 and 100 (default)
-  stream   stream the whole collection
+  feed       create the collection (if needed) and feed a new version named yyyyMMdd-HHmmss
+  read       query random primary keys in batches of 1, 5, 10 and 100 (default)
+  stream     stream the whole collection
+  secondary  query random secondary key values through the Aggregator, sequentially then 8 at a time;
+             each value matches about size/1000 items
 
   --server <host:port>   server to connect to (default localhost:5123)
   --collection <name>    collection name (default big)
   --size <count>         number of items to feed; feed only (default 2000000)
+  --queries <count>      number of queries per run; secondary only (default 200)
   --ssl                  connect over TLS (server certificate is not validated)
 ```
 
 ```bash
 PerfTest feed --server cache-01:5123 --collection perf --size 10000000 --ssl
 PerfTest read --server cache-01:5123 --collection perf --ssl
+PerfTest secondary --server cache-01:5123 --collection perf --queries 1000 --ssl
 ```
+
+`secondary` reports, for each run, the latency per query (p50, p95, max) and the throughput in
+queries, items and megabytes per second. It relies on the secondary key written by `feed`
+(`id % 1000`); collections fed by PerfTest versions before October 2026 used a unique value per
+item and must be fed again.
 
 ### ProfilingTool
 
@@ -654,6 +705,9 @@ dotnet build FrozenCache.sln
 dotnet test --project UnitTests/UnitTests.csproj
 dotnet test --project UnitTests/UnitTests.csproj --filter "FullyQualifiedName~IntegrationTest"
 ```
+
+Building the `FrozenCache` server also builds the [dashboard](#dashboard) with npm; add
+`-p:SkipDashboard=true` on a machine without Node.js.
 
 Tests use NUnit on [Microsoft.Testing.Platform](https://learn.microsoft.com/dotnet/core/testing/microsoft-testing-platform-intro)
 (MTP). The `global.json` at the repository root switches `dotnet test` to MTP mode, which takes
@@ -691,8 +745,6 @@ GitHub release.
 ## Limitations
 
 - **No partial updates.** A collection changes only by feeding a complete new version.
-- **Secondary indexes** are queryable through `Connector.StreamBySecondaryIndex` only, not yet
-  through `Aggregator`.
 - **Integer keys only.** Non-numeric values must be converted to `long` on the client (see
   [Keys and `KeyProducers`](#keys-and-keyproducers)).
 - **Replica drift.** Replicas are fed independently; if one is down during a feed, it stays on the

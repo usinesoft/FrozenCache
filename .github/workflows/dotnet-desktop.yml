@@ -65,6 +65,14 @@ jobs:
       with:
         dotnet-version: 10.0.x
 
+    # building the server builds the Angular dashboard (FrozenCache/Dashboard)
+    - name: Install Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: FrozenCache/Dashboard/package-lock.json
+
     # Native AOT on Linux links via clang; the Windows runner already has the MSVC toolchain preinstalled.
     - name: Install native AOT prerequisites (Linux)
       if: runner.os == 'Linux'
@@ -97,6 +105,14 @@ jobs:
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: 10.0.x
+
+    # building the server builds the Angular dashboard (FrozenCache/Dashboard)
+    - name: Install Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: FrozenCache/Dashboard/package-lock.json
 
     # Framework-dependent, RID-less (AnyCPU) build: requires the .NET 10 runtime (ASP.NET Core runtime for the
     # server) on the target machine and runs on any OS/architecture via `dotnet FrozenCache.dll`.

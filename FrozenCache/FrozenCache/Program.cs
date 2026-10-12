@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using FrozenCache.Server;
 using Messages;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Options;
 using PersistentStore;
 using Serilog;
@@ -97,7 +98,22 @@ internal static class Program
         
         store.Open(logger);
 
-        
+        // Angular dashboard at /dashboard, built into the "dashboard" folder next to the executable (see
+        // FrozenCache.csproj). Absent when the server was built with -p:SkipDashboard=true.
+        var dashboardPath = Path.Combine(AppContext.BaseDirectory, "dashboard");
+        if (Directory.Exists(dashboardPath))
+        {
+            var dashboardFiles = new PhysicalFileProvider(dashboardPath);
+
+            // "/dashboard" redirects to "/dashboard/", which serves index.html
+            app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = dashboardFiles, RequestPath = "/dashboard" });
+            app.UseStaticFiles(new StaticFileOptions { FileProvider = dashboardFiles, RequestPath = "/dashboard" });
+        }
+        else
+        {
+            app.Logger.LogWarning("Dashboard not found in {Path}: /dashboard is not available", dashboardPath);
+        }
+
         // Collection information
         var collectionsApi = app.MapGroup("/collections");
         collectionsApi.MapGet("/", (IDataStore dataStore ) =>

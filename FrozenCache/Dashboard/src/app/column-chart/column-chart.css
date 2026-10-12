@@ -1,0 +1,128 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+
+:host(.series-calls) {
+  --series: var(--series-calls);
+}
+
+:host(.series-duration) {
+  --series: var(--series-duration);
+}
+
+.chart-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.25rem;
+}
+
+h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.peak {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.plot {
+  position: relative;
+  border-radius: 8px;
+  outline: none;
+}
+
+.plot:focus-visible {
+  box-shadow: 0 0 0 2px var(--series);
+}
+
+svg {
+  display: block;
+  overflow: visible;
+  touch-action: none;
+}
+
+.grid {
+  stroke: var(--chart-grid);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.tick {
+  fill: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.column {
+  fill: var(--series);
+  transition: filter 0.1s ease;
+}
+
+/* the hovered column lifts slightly */
+.column.hovered {
+  filter: brightness(1.18);
+}
+
+/* the hovered bucket's slot, so that an empty one responds too */
+.hover-band {
+  fill: var(--chart-grid);
+  opacity: 0.6;
+}
+
+.tooltip {
+  position: absolute;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  background: var(--chart-surface);
+  border: 1px solid var(--card-border);
+  box-shadow: var(--card-shadow), 0 4px 12px rgba(0, 0, 0, 0.08);
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 1;
+}
+
+.tooltip.align-middle {
+  transform: translateX(-50%);
+}
+
+.tooltip.align-start {
+  transform: translateX(10px);
+}
+
+.tooltip.align-end {
+  transform: translateX(calc(-100% - 10px));
+}
+
+.tooltip strong {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.tooltip span {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.empty {
+  position: absolute;
+  inset: 0 0 22px 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  pointer-events: none;
+}

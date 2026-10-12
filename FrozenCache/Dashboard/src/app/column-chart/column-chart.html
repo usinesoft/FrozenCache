@@ -1,0 +1,57 @@
+<div class="chart-header">
+  <h3>{{ title() }}</h3>
+  @if (hasData()) {
+    <span class="peak">peak {{ formatValue()(peak()) }}</span>
+  }
+</div>
+
+<div
+  class="plot"
+  tabindex="0"
+  role="img"
+  [attr.aria-label]="ariaLabel()"
+  (keydown)="onKeyDown($event)"
+  (focus)="onFocus()"
+  (blur)="hoverIndex.set(null)"
+>
+  <svg
+    [attr.width]="width()"
+    [attr.height]="height"
+    [attr.viewBox]="'0 0 ' + width() + ' ' + height"
+    (pointermove)="onPointerMove($event)"
+    (pointerleave)="hoverIndex.set(null)"
+    aria-hidden="true"
+  >
+    @if (hover(); as h) {
+      <rect class="hover-band" [attr.x]="h.bandX" [attr.y]="top" [attr.width]="h.bandWidth" [attr.height]="bottom - top" />
+    }
+
+    @for (tick of yTicks(); track $index) {
+      <line class="grid" [attr.x1]="left" [attr.x2]="right()" [attr.y1]="tick.y" [attr.y2]="tick.y" />
+      <text class="tick" [attr.x]="left - 8" [attr.y]="tick.y" dy="0.32em" text-anchor="end">
+        {{ tick.label }}
+      </text>
+    }
+
+    @for (tick of xTicks(); track tick.time) {
+      <text class="tick" [attr.x]="tick.x" [attr.y]="height - 6" [attr.text-anchor]="tick.anchor">
+        {{ tick.label }}
+      </text>
+    }
+
+    @for (column of columns(); track column.index) {
+      <path class="column" [class.hovered]="hover()?.index === column.index" [attr.d]="column.d" />
+    }
+  </svg>
+
+  @if (hover(); as h) {
+    <div class="tooltip" [class]="'tooltip align-' + h.align" [style.left.px]="h.x" aria-hidden="true">
+      <strong>{{ h.valueLabel }}</strong>
+      <span>{{ h.timeLabel }}</span>
+    </div>
+  }
+
+  @if (!hasData()) {
+    <div class="empty">{{ emptyMessage() }}</div>
+  }
+</div>

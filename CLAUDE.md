@@ -69,7 +69,20 @@ PerfTest            <- another standalone perf/load console app driving a runnin
                        default, see --server). Depends on CacheClient, Messages only.
 UnitTests           <- NUnit tests; depends on CacheClient, FrozenCache.Server, Messages, PersistentStore -
                        deliberately not on the FrozenCache exe itself.
+Dashboard           <- Angular 21 app (not a .NET project), served by the FrozenCache exe at /dashboard. Talks to the
+                       server only through its HTTP API (GET /collections, /collections/{name}/monitoring).
 ```
+
+The `FrozenCache` exe's build runs `npm ci` (if `node_modules` is missing) and `npm run build` in `Dashboard/`
+(target `BuildDashboard`, incremental on the dashboard sources), then ships `dist/FrozenCacheDashboard/browser` as a
+`dashboard` folder next to the executable (target `IncludeDashboard`, as `None` items before `AssignTargetPaths`, so
+build and publish output both get it). Deliberately not `wwwroot`: the Web SDK treats that as static web assets,
+copied only on publish, while the server always serves from its own directory. `-p:SkipDashboard=true` builds without
+Node. The Angular app uses base href `/dashboard/` and absolute API paths; `npm start` proxies them to
+`localhost:5213` (`proxy.conf.json`). Charts are hand-written SVG columns (`column-chart`), no chart library;
+`collection-card` groups the server's per-minute statistics into 1/5/15-minute buckets for the 1/6/24-hour ranges
+(durations weighted by calls). Their two series colors are tokens in `src/styles.css`, validated for colorblind
+separation and >= 3:1 contrast on both card surfaces.
 
 `Messages` and `PersistentStore` must stay free of dependencies on `FrozenCache.Server`/`FrozenCache`/`CacheClient`
 — the dependency graph is intentionally one-directional (protocol/storage at the bottom, server engine and client
@@ -135,5 +148,11 @@ tests and tools can depend on the server engine without dragging in the web host
 - `Aggregator.RegisterTypedCollection<T>` + `FeedCollection<T>`/`QueryByPrimaryKey<T>` layer typed
   serialize/deserialize/key-extraction on top of the raw `byte[]`/`Item` protocol — register a type before
   feeding/querying it by type.
+- Secondary keys: `Aggregator.QueryBySecondaryKey<T>` (list), `StreamBySecondaryKey<T>` and
+  `StreamRawDataBySecondaryKey` (streams). Retries go to another replica only on connection failures
+  (`IsConnectionFailure`: I/O errors and `ConnectionClosedException`, the `CacheException` subtype `Connector` throws
+  when the server closes the connection instead of answering) — never on server-reported `CacheException`s, and for
+  streams only before the first result. A stream not read to its end leaves unread batches on its connection, so it
+  goes back via `ConnectorPool.Discard` (close and replace), never `Return`.
 - `LruLocalCache` (per-collection, opt-in via `Aggregator.ConfigureLocalCache`) sits in front of server queries
   and also caches negative lookups (a "not found" marker) to avoid repeated round-trips for missing keys.

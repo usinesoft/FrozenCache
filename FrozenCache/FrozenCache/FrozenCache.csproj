@@ -27,4 +27,37 @@
     <ProjectReference Include="..\PersistentStore\PersistentStore.csproj" />
   </ItemGroup>
 
+  <!--
+    Angular dashboard (../Dashboard), built with the server and shipped next to the executable in a "dashboard"
+    folder, served at /dashboard (see Program.cs). Not wwwroot: the Web SDK treats wwwroot as static web assets,
+    copied only on publish, while this server always serves from its own directory (the working directory is
+    forced to it at startup, for Windows service hosting).
+    Requires Node.js and npm; pass -p:SkipDashboard=true to build the server alone.
+  -->
+  <PropertyGroup>
+    <DashboardDir>$(MSBuildProjectDirectory)\..\Dashboard</DashboardDir>
+    <DashboardDistDir>$(DashboardDir)\dist\FrozenCacheDashboard\browser</DashboardDistDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <DashboardSources Include="$(DashboardDir)\src\**\*;$(DashboardDir)\public\**\*;$(DashboardDir)\package.json;$(DashboardDir)\package-lock.json;$(DashboardDir)\angular.json;$(DashboardDir)\tsconfig*.json" />
+  </ItemGroup>
+
+  <!-- Incremental: skipped when no dashboard source changed since the last Angular build. -->
+  <Target Name="BuildDashboard" Condition="'$(SkipDashboard)' != 'true'" Inputs="@(DashboardSources)" Outputs="$(DashboardDistDir)\index.html">
+    <Exec Command="npm ci" WorkingDirectory="$(DashboardDir)" Condition="!Exists('$(DashboardDir)\node_modules')" />
+    <Exec Command="npm run build" WorkingDirectory="$(DashboardDir)" />
+  </Target>
+
+  <!-- Separate from BuildDashboard so that the files are included even when that target is skipped as up to date.
+       Runs before AssignTargetPaths, so they take part in the normal copy to the output and publish directories. -->
+  <Target Name="IncludeDashboard" BeforeTargets="AssignTargetPaths" DependsOnTargets="BuildDashboard" Condition="'$(SkipDashboard)' != 'true'">
+    <!-- Two steps, with qualified metadata: an unqualified %(Filename) here would batch over the project's
+         existing None items and copy those into the dashboard folder instead. -->
+    <ItemGroup>
+      <DashboardFiles Include="$(DashboardDistDir)\**\*" />
+      <None Include="@(DashboardFiles)" Link="dashboard\%(DashboardFiles.RecursiveDir)%(DashboardFiles.Filename)%(DashboardFiles.Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+
 </Project>

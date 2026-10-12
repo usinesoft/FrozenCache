@@ -162,7 +162,8 @@ public class SslTest
                 Assert.That(client.Connect(), Is.True,
                     "The plain TCP connect itself succeeds; the mismatch only surfaces at the protocol level");
 
-                var ex = Assert.ThrowsAsync<CacheException>(async () =>
+                // a CacheException subtype: the server closed the connection rather than reporting an error
+                var ex = Assert.ThrowsAsync<ConnectionClosedException>(async () =>
                     await client.CreateCollection("testCollection", "id"));
 
                 Assert.That(ex!.Message, Does.Contain("SSL"),

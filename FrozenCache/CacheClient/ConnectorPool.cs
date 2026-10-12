@@ -326,6 +326,33 @@ public sealed class ConnectorPool : IDisposable, IAsyncDisposable
         _pool.Writer.TryWrite(connector);
     }
 
+    /// <summary>
+    ///     Closes a connector that can't be reused although the server is fine - typically a stream abandoned
+    ///     before its end, which leaves unread data on the connection - and opens a replacement, so that the
+    ///     pool keeps its capacity. Unlike returning an unhealthy connector, this does not mark the server down,
+    ///     unless the replacement can't connect.
+    /// </summary>
+    public void Discard(Connector connector)
+    {
+        ArgumentNullException.ThrowIfNull(connector);
+
+        connector.Dispose();
+
+        if (_disposed || !IsConnected)
+            return; // the pool will be refilled by the watchdog when it reconnects
+
+        var replacement = new Connector(_server, _port, _useSsl, _validateServerCertificate);
+        if (replacement.Connect())
+        {
+            _pool.Writer.TryWrite(replacement);
+        }
+        else
+        {
+            replacement.Dispose();
+            MarkAsNotConnected();
+        }
+    }
+
     private bool _disposed;
     public void Dispose()
     {

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="FrozenCache">
+  <defs>
+    <linearGradient id="ice" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e3f5ff"/>
+      <stop offset="1" stop-color="#8fd3fb"/>
+    </linearGradient>
+    <linearGradient id="iceSide" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6cb8f0"/>
+      <stop offset="1" stop-color="#3a86d6"/>
+    </linearGradient>
+    <linearGradient id="side" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#3a86d6"/>
+      <stop offset="1" stop-color="#1f5fb0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- storage stack: two plain disks... -->
+  <path d="M9 45v8a23 7.5 0 0 0 46 0v-8" fill="url(#side)"/>
+  <ellipse cx="32" cy="45" rx="23" ry="7.5" fill="#5aa9ea"/>
+  <path d="M9 33v8a23 7.5 0 0 0 46 0v-8" fill="url(#side)"/>
+  <ellipse cx="32" cy="33" rx="23" ry="7.5" fill="#5aa9ea"/>
+
+  <!-- ...and a frozen one on top -->
+  <path d="M9 19v8a23 7.5 0 0 0 46 0v-8" fill="url(#iceSide)"/>
+  <!-- icicles hanging from the frozen disk -->
+  <path d="M15 31.5l2 6 2-5.2zM24 33.8l2.2 7 2.2-6.6zM36 34l2 5.6 2-6.1zM45 32.6l1.8 4.6 1.8-5.6z" fill="#8fd3fb"/>
+  <ellipse cx="32" cy="19" rx="23" ry="7.5" fill="url(#ice)"/>
+  <!-- facets cut into the ice -->
+  <path d="M14 17.5L27 13.5L37 22.5L50 18.5M27 13.5L24 24.5M37 22.5L41 12.5" fill="none" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
+  <polygon points="12,23 12,27 15,28.6 15,24.4" fill="#ffffff" opacity="0.35"/>
+</svg>

@@ -11,18 +11,35 @@ namespace PerfTest
         private const string DefaultServer = "localhost:5123";
         private const string DefaultCollection = "big";
         private const int DefaultSize = 2_000_000;
+        private const int DefaultQueries = 200;
+
+        /// <summary>
+        /// Secondary index of the collections fed by this tool. Historical name, kept so that existing collections
+        /// remain compatible: it holds the item's group (id % <see cref="SecondaryKeyGroups"/>), so that each value
+        /// matches many items.
+        /// </summary>
+        private const string SecondaryIndex = "name";
+        private const int SecondaryKeyGroups = 1000;
+
+        /// <summary>
+        /// Concurrent queries in the parallel secondary-key run, and connection pool size.
+        /// </summary>
+        private const int Concurrency = 8;
 
         private static readonly string Usage = $"""
-            Usage: PerfTest [feed|read|stream] [options]
+            Usage: PerfTest [feed|read|stream|secondary] [options]
 
-              feed     create the collection (if needed) and feed a new version named after the current time (yyyyMMdd-HHmmss)
-              read     query random primary keys in batches of 1, 5, 10 and 100 (default action)
-              stream   stream the whole collection
+              feed       create the collection (if needed) and feed a new version named after the current time (yyyyMMdd-HHmmss)
+              read       query random primary keys in batches of 1, 5, 10 and 100 (default action)
+              stream     stream the whole collection
+              secondary  query random secondary key values through the Aggregator, sequentially then {Concurrency} at a time;
+                         each value matches about size/{SecondaryKeyGroups} items
 
             Options:
               --server <host:port>   server to connect to (default {DefaultServer})
               --collection <name>    collection name (default {DefaultCollection})
               --size <count>         number of items to feed; feed only (default {DefaultSize})
+              --queries <count>      number of queries per run; secondary only (default {DefaultQueries})
               --ssl                  connect over TLS (server certificate is not validated)
             """;
 
@@ -32,6 +49,7 @@ namespace PerfTest
             string server = DefaultServer;
             string collection = DefaultCollection;
             int size = DefaultSize;
+            int queries = DefaultQueries;
             bool useSsl = false;
 
             for (int i = 0; i < args.Length; i++)
@@ -59,6 +77,10 @@ namespace PerfTest
                         size = parsedSize;
                         i++;
                         break;
+                    case "--queries" when i + 1 < args.Length && int.TryParse(args[i + 1], out var parsedQueries) && parsedQueries > 0:
+                        queries = parsedQueries;
+                        i++;
+                        break;
                     default:
                         Console.WriteLine($"Invalid or incomplete option: {arg}");
                         Console.WriteLine(Usage);
@@ -66,7 +88,7 @@ namespace PerfTest
                 }
             }
 
-            if (action is not ("feed" or "read" or "stream"))
+            if (action is not ("feed" or "read" or "stream" or "secondary"))
             {
                 Console.WriteLine($"Unknown action: {action}");
                 Console.WriteLine(Usage);
@@ -103,6 +125,10 @@ namespace PerfTest
                 {
                     await StreamData(connector, collection);
                 }
+                else if (action == "secondary")
+                {
+                    await QueryBySecondaryKey(connector, host, port, useSsl, collection, queries);
+                }
                 else
                 {
                     await ReadData(connector, collection);
@@ -137,19 +163,31 @@ namespace PerfTest
             return host.Length > 0;
         }
 
-        private static async Task ReadData(Connector connector, string collection)
+        /// <summary>
+        /// The collection's description, or null (with a message) if it doesn't exist or is empty.
+        /// </summary>
+        private static async Task<CollectionInformation?> GetNonEmptyCollection(Connector connector, string collection)
         {
-            // items are fed with primary keys 0..count-1, so the collection size gives the key range to query
             var description = await connector.GetCollectionsDescription();
             var info = description.Collections.FirstOrDefault(c => c.Name == collection);
             if (info == null || info.Count == 0)
             {
                 Console.WriteLine($"Collection '{collection}' not found or empty");
-                return;
+                return null;
             }
 
+            Console.WriteLine($"Collection '{collection}' version {info.LastVersion} contains {info.Count} items");
+            return info;
+        }
+
+        private static async Task ReadData(Connector connector, string collection)
+        {
+            // items are fed with primary keys 0..count-1, so the collection size gives the key range to query
+            var info = await GetNonEmptyCollection(connector, collection);
+            if (info == null)
+                return;
+
             int maxId = info.Count;
-            Console.WriteLine($"Collection '{collection}' version {info.LastVersion} contains {maxId} items");
 
             await QueryByBatch(connector, collection, 1, 100, maxId);
             var watch = Stopwatch.StartNew();
@@ -174,6 +212,78 @@ namespace PerfTest
             await QueryByBatch(connector, collection, 100, 100, maxId);
             watch.Stop();
             Console.WriteLine($"Reading 100 times 100 objects took {watch.ElapsedMilliseconds} ms");
+        }
+
+        private static async Task QueryBySecondaryKey(Connector connector, string host, int port, bool useSsl,
+            string collection, int queries)
+        {
+            var info = await GetNonEmptyCollection(connector, collection);
+            if (info == null)
+                return;
+
+            // items are fed with secondary key id % SecondaryKeyGroups, so these are the values that exist
+            var groups = Math.Min(SecondaryKeyGroups, info.Count);
+            Console.WriteLine($"Each '{SecondaryIndex}' value matches about {info.Count / groups:N0} items");
+
+            var aggregator = new Aggregator(Concurrency, useSsl, false, 10_000, (host, port));
+
+            await RunSecondaryKeyQueries(aggregator, collection, groups, Math.Max(1, queries / 10), 1); // warm-up
+
+            var sequential = await RunSecondaryKeyQueries(aggregator, collection, groups, queries, 1);
+            sequential.Print("sequential");
+
+            var parallel = await RunSecondaryKeyQueries(aggregator, collection, groups, queries, Concurrency);
+            parallel.Print($"{Concurrency} concurrent");
+
+            if (sequential.Items == 0)
+                Console.WriteLine($"No item matched: this collection was probably fed by an older PerfTest, " +
+                                  $"which used a unique '{SecondaryIndex}' per item. Feed it again.");
+        }
+
+        private sealed record SecondaryKeyRun(int Queries, long Items, long Bytes, TimeSpan Elapsed, double[] LatenciesMs)
+        {
+            public void Print(string label)
+            {
+                Array.Sort(LatenciesMs);
+                double Percentile(double p) => LatenciesMs[(int)Math.Ceiling(p * LatenciesMs.Length) - 1];
+
+                var seconds = Elapsed.TotalSeconds;
+                Console.WriteLine($"Secondary key, {label}: {Queries} queries, {Items:N0} items, {Bytes / 1e6:N1} MB " +
+                                  $"in {Elapsed.TotalMilliseconds:N0} ms");
+                Console.WriteLine($"  latency per query: p50 {Percentile(0.5):N2} ms, p95 {Percentile(0.95):N2} ms, " +
+                                  $"max {LatenciesMs[^1]:N2} ms");
+                Console.WriteLine($"  throughput: {Queries / seconds:N0} queries/s, {Items / seconds:N0} items/s, " +
+                                  $"{Bytes / 1e6 / seconds:N1} MB/s");
+            }
+        }
+
+        private static async Task<SecondaryKeyRun> RunSecondaryKeyQueries(Aggregator aggregator, string collection,
+            int groups, int queries, int parallelism)
+        {
+            long items = 0, bytes = 0;
+            var latencies = new double[queries];
+
+            var watch = Stopwatch.StartNew();
+
+            await Parallel.ForAsync(0, queries, new ParallelOptions { MaxDegreeOfParallelism = parallelism },
+                async (query, cancellationToken) =>
+                {
+                    var start = Stopwatch.GetTimestamp();
+                    long queryItems = 0, queryBytes = 0;
+
+                    await foreach (var (_, data) in aggregator.StreamRawDataBySecondaryKey(collection, SecondaryIndex,
+                                       Random.Shared.Next(groups), cancellationToken))
+                    {
+                        queryItems++;
+                        queryBytes += data.Length;
+                    }
+
+                    latencies[query] = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+                    Interlocked.Add(ref items, queryItems);
+                    Interlocked.Add(ref bytes, queryBytes);
+                });
+
+            return new SecondaryKeyRun(queries, items, bytes, watch.Elapsed, latencies);
         }
 
         private static async Task StreamData(Connector connector, string collection)
@@ -227,7 +337,7 @@ namespace PerfTest
             {
                 var data = new byte[i % 2 == 0 ? smallObjectSize : largeObjectSize];
                 new Random().NextBytes(data);
-                yield return new Item(data, i, i*10);
+                yield return new Item(data, i, i % SecondaryKeyGroups);
             }
         }
 

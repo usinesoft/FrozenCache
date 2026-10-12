@@ -1,0 +1,113 @@
+<article class="card">
+  <header>
+    <h2>{{ info().name }}</h2>
+    <span class="version" title="Active version">{{ info().lastVersion }}</span>
+  </header>
+
+  <div class="hero">
+    <span class="count">{{ formatInteger(info().count) }}</span>
+    <span class="unit">objects</span>
+  </div>
+
+  <dl class="facts">
+    <div>
+      <dt>Size</dt>
+      <dd>{{ formatBytes(info().sizeInBytes) }}</dd>
+    </div>
+    <div>
+      <dt>Average object</dt>
+      <dd>{{ formatBytes(info().avgObjectSize) }}</dd>
+    </div>
+    <div>
+      <dt>Primary key</dt>
+      <dd class="key">{{ primaryKey() }}</dd>
+    </div>
+    <div>
+      <dt>Secondary indexes</dt>
+      <dd>
+        @for (key of secondaryKeys(); track key) {
+          <span class="key">{{ key }}</span>
+        } @empty {
+          <span class="none">none</span>
+        }
+      </dd>
+    </div>
+    <div>
+      <dt>Segment files</dt>
+      <dd>
+        {{ formatBytes(info().segmentFileSize) }} ·
+        {{ formatInteger(info().maxObjectsPerSegment) }} objects max
+      </dd>
+    </div>
+    <div>
+      <dt>Lookups in period</dt>
+      <dd>
+        {{ formatInteger(totals().calls) }}
+        @if (totals().averageMicroseconds !== null) {
+          <span class="secondary">· {{ formatMicroseconds(totals().averageMicroseconds!) }} avg</span>
+        }
+      </dd>
+    </div>
+  </dl>
+
+  <div class="charts">
+    <fc-column-chart
+      [title]="callsTitle()"
+      series="calls"
+      [buckets]="callsSeries()"
+      [formatValue]="formatCalls"
+      [formatTick]="formatCallsTick"
+      [lastIsPartial]="true"
+      gapLabel="No lookups"
+      emptyMessage="No lookups in this period"
+    />
+    <fc-column-chart
+      title="Average lookup duration"
+      series="duration"
+      [buckets]="durationSeries()"
+      [formatValue]="formatMicroseconds"
+      [formatTick]="formatDurationTick"
+      [lastIsPartial]="true"
+      gapLabel="No lookups"
+      emptyMessage="No lookups in this period"
+    />
+  </div>
+
+  <button
+    type="button"
+    class="data-toggle"
+    [attr.aria-expanded]="showTable()"
+    (click)="showTable.set(!showTable())"
+  >
+    {{ showTable() ? 'Hide data' : 'Show data' }}
+  </button>
+
+  @if (showTable()) {
+    <div class="table-wrapper">
+      @if (tableRows().length > 0) {
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">{{ bucketMinutes() === 1 ? 'Minute' : 'Time' }}</th>
+              <th scope="col">Lookups</th>
+              <th scope="col">Objects</th>
+              <th scope="col">Average</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (row of tableRows(); track row.start) {
+              <tr>
+                <td>{{ row.label }}</td>
+                <td>{{ formatInteger(row.calls) }}</td>
+                <td>{{ formatInteger(row.objects) }}</td>
+                <td>{{ formatMicroseconds(row.averageMicroseconds!) }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      } @else {
+        <p class="none">No lookups in this period.</p>
+      }
+    </div>
+  }
+</article>

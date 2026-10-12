@@ -1,0 +1,6 @@
+{
+  "/collections": {
+    "target": "http://localhost:5213",
+    "secure": false
+  }
+}

@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using CacheClient.LocalCache;
 using Messages;
@@ -371,6 +372,148 @@ public class Aggregator
 
         return result;
     }
+
+    /// <summary>
+    /// All the documents whose value for the index <paramref name="indexName"/> equals <paramref name="keyValue"/>,
+    /// deserialized as <typeparamref name="T"/> (see <see cref="RegisterTypedCollection{T}"/>). The whole result is
+    /// held in memory; use <see cref="StreamBySecondaryKey{T}"/> for large ones. If a replica fails part way
+    /// through, the query is restarted on another one.
+    /// </summary>
+    /// <param name="collection">Collection name.</param>
+    /// <param name="indexName">Name of an index declared by <see cref="DeclareCollection"/>.</param>
+    /// <param name="keyValue">Key value, converted exactly like the key generator registered for this index.</param>
+    public async Task<List<T>> QueryBySecondaryKey<T>(string collection, string indexName, long keyValue)
+    {
+        var deserializer = GetDeserializer<T>();
+
+        while (true)
+        {
+            var result = new List<T>();
+            try
+            {
+                await foreach (var (_, data) in StreamRawDataBySecondaryKey(collection, indexName, keyValue))
+                    result.Add((T)deserializer(data));
+
+                return result;
+            }
+            catch (Exception e) when (IsConnectionFailure(e))
+            {
+                // the replica is now marked as disconnected, so the next attempt goes to another one
+                Debug.Print($"QueryBySecondaryKey : replica failed during the query, retrying: {e.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Streams the documents whose value for the index <paramref name="indexName"/> equals
+    /// <paramref name="keyValue"/>, deserialized as <typeparamref name="T"/> (see
+    /// <see cref="RegisterTypedCollection{T}"/>). Same behavior as <see cref="StreamRawDataBySecondaryKey"/>.
+    /// </summary>
+    public IAsyncEnumerable<T> StreamBySecondaryKey<T>(string collection, string indexName, long keyValue,
+        CancellationToken cancellationToken = default)
+    {
+        // resolved eagerly: in an iterator method the throw would only surface once enumeration starts
+        var deserializer = GetDeserializer<T>();
+
+        return StreamBySecondaryKeyCore<T>(collection, indexName, keyValue, deserializer, cancellationToken);
+    }
+
+    private async IAsyncEnumerable<T> StreamBySecondaryKeyCore<T>(string collection, string indexName, long keyValue,
+        Func<byte[], object> deserializer, [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await foreach (var (_, data) in StreamRawDataBySecondaryKey(collection, indexName, keyValue, cancellationToken))
+            yield return (T)deserializer(data);
+    }
+
+    /// <summary>
+    /// Streams the documents whose value for the index <paramref name="indexName"/> equals
+    /// <paramref name="keyValue"/>, as raw data paired with their primary key.
+    /// <para>
+    /// Results come from a single replica, preferring those on the latest version of the collection, and are
+    /// streamed in batches, so a large result never needs to fit in memory. If the replica fails before the first
+    /// result, the query is retried on another one; after that, the failure is propagated, since a retry would
+    /// return the same documents twice. Server-side errors (unknown collection or index) are never retried.
+    /// </para>
+    /// <para>
+    /// The enumeration can be stopped early: the connection, which still holds unread results, is then replaced
+    /// rather than returned to the pool.
+    /// </para>
+    /// </summary>
+    /// <param name="collection">Collection name.</param>
+    /// <param name="indexName">Name of an index declared by <see cref="DeclareCollection"/>.</param>
+    /// <param name="keyValue">Key value, converted exactly like the key generator registered for this index.</param>
+    /// <param name="cancellationToken">Checked between results.</param>
+    public async IAsyncEnumerable<(long PrimaryKey, byte[] Data)> StreamRawDataBySecondaryKey(string collection,
+        string indexName, long keyValue, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        while (true)
+        {
+            var connector = await Get(collection);
+            var pool = _pools.FirstOrDefault(p => p.Address == connector.Address);
+
+            var results = connector.StreamBySecondaryIndex(collection, indexName, keyValue).GetAsyncEnumerator(CancellationToken.None);
+
+            var completed = false;
+            var connectionFailed = false;
+            var anyResult = false;
+
+            try
+            {
+                while (true)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    bool hasResult;
+                    try
+                    {
+                        hasResult = await results.MoveNextAsync();
+                    }
+                    catch (Exception e) when (IsConnectionFailure(e))
+                    {
+                        connectionFailed = true;
+                        pool?.MarkAsNotConnected();
+
+                        if (anyResult)
+                            throw;
+
+                        break; // nothing returned yet: retry on another replica
+                    }
+
+                    if (!hasResult)
+                    {
+                        completed = true;
+                        yield break;
+                    }
+
+                    anyResult = true;
+                    yield return results.Current;
+                }
+            }
+            finally
+            {
+                await results.DisposeAsync();
+
+                if (completed)
+                    Return(connector);
+                else if (connectionFailed || pool == null)
+                    connector.Dispose(); // the pool was already cleared
+                else
+                    pool.Discard(connector); // abandoned, cancelled or server-side error: unread data may remain
+            }
+        }
+    }
+
+    /// <summary>
+    /// True for failures of the connection itself, as opposed to errors reported by the server (other
+    /// <see cref="CacheException"/>s) that would occur on any replica.
+    /// </summary>
+    private static bool IsConnectionFailure(Exception e) =>
+        e is ConnectionClosedException or IOException or SocketException or ObjectDisposedException;
+
+    private Func<byte[], object> GetDeserializer<T>() =>
+        _deserializers.TryGetValue(typeof(T), out var deserializer)
+            ? deserializer
+            : throw new CacheException($"No collection was registered for type {typeof(T)}");
 
 
     /// <summary>

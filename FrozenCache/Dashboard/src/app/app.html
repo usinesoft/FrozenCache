@@ -1,0 +1,55 @@
+<div class="layout">
+  <header class="title">
+    <div class="brand">
+      <img src="logo.svg" alt="" width="56" height="56" />
+      <div>
+        <h1><span class="frozen">Frozen</span><span class="cache">Cache</span></h1>
+        <p class="subtitle">Collections and lookup activity</p>
+      </div>
+    </div>
+
+    <div class="status" aria-live="polite">
+      @if (error(); as message) {
+        <span class="error">{{ message }}</span>
+      } @else if (updatedAt(); as time) {
+        <span>Updated {{ formatUpdatedAt(time) }}</span>
+      }
+    </div>
+  </header>
+
+  <div class="filters" role="group" aria-label="Time range">
+    @for (range of ranges; track range.minutes) {
+      <button
+        type="button"
+        [class.selected]="rangeMinutes() === range.minutes"
+        [attr.aria-pressed]="rangeMinutes() === range.minutes"
+        (click)="selectRange(range.minutes)"
+      >
+        {{ range.label }}
+      </button>
+    }
+  </div>
+
+  @if (collections(); as list) {
+    @if (list.length > 0) {
+      <main class="cards" [class.refreshing]="refreshing()">
+        @for (collection of list; track collection.info.name) {
+          <fc-collection-card
+            [info]="collection.info"
+            [minutes]="collection.minutes"
+            [rangeMinutes]="rangeMinutes()"
+            [now]="updatedAt()!"
+          />
+        }
+      </main>
+    } @else {
+      <main class="message">
+        <p>No collection yet. Feed one with the client API, or with <code>PerfTest feed</code>.</p>
+      </main>
+    }
+  } @else if (!error()) {
+    <main class="message">
+      <p>Loading…</p>
+    </main>
+  }
+</div>

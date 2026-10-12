@@ -1,0 +1,95 @@
+/*
+  Design tokens. The cards follow QuirkByte's: frosted glass (translucent surface + backdrop blur) and a
+  five-layer shadow doubling from 1px to 16px. The palette is QuirkByte's, cooled down for a "frozen" cache.
+  Chart series colors were validated (colorblind separation, contrast >= 3:1) against both card surfaces.
+*/
+:root {
+  color-scheme: light;
+
+  --page-background: linear-gradient(135deg, #fbfdff 0%, #d7e5ef 50%, #c9dbe8 100%);
+
+  --text-primary: #1f2a30;
+  --text-secondary: #46555d;
+  --text-muted: #5d6b73;
+
+  --logo-dark: #2f4550;
+  --logo-ice: #2a78d6;
+
+  --card-background: rgba(255, 255, 255, 0.45);
+  --card-border: rgba(255, 255, 255, 0.55);
+  --card-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.02),
+    0 2px 4px rgba(0, 0, 0, 0.02),
+    0 4px 8px rgba(0, 0, 0, 0.02),
+    0 8px 16px rgba(0, 0, 0, 0.02),
+    0 16px 32px rgba(0, 0, 0, 0.02);
+
+  --chart-surface: #f2f6f9;
+  --chart-grid: rgba(31, 42, 48, 0.1);
+  --series-calls: #2a78d6;
+  --series-duration: #d95926;
+
+  --control-background: rgba(255, 255, 255, 0.5);
+  --control-border: rgba(47, 69, 80, 0.2);
+  --control-selected-background: #2f4550;
+  --control-selected-text: #ffffff;
+
+  --error: #b42828;
+
+  --font: "Fira Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --page-background: linear-gradient(135deg, #1f2a31 0%, #121a1f 50%, #0d1317 100%);
+
+    --text-primary: #e8eef2;
+    --text-secondary: #b4c0c7;
+    --text-muted: #8e9ba3;
+
+    --logo-dark: #e8eef2;
+    --logo-ice: #6aaef0;
+
+    --card-background: rgba(34, 46, 54, 0.55);
+    --card-border: rgba(255, 255, 255, 0.08);
+    /* the same five layers; 2% is invisible on a dark page */
+    --card-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.12),
+      0 2px 4px rgba(0, 0, 0, 0.12),
+      0 4px 8px rgba(0, 0, 0, 0.12),
+      0 8px 16px rgba(0, 0, 0, 0.12),
+      0 16px 32px rgba(0, 0, 0, 0.12);
+
+    --chart-surface: #1b2329;
+    --chart-grid: rgba(232, 238, 242, 0.1);
+    --series-calls: #3987e5;
+    --series-duration: #d95926;
+
+    --control-background: rgba(255, 255, 255, 0.06);
+    --control-border: rgba(255, 255, 255, 0.14);
+    --control-selected-background: #e8eef2;
+    --control-selected-text: #121a1f;
+
+    --error: #f07a7a;
+  }
+}
+
+html {
+  min-height: 100%;
+  background: var(--page-background);
+  background-attachment: fixed;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}

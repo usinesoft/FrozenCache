@@ -425,7 +425,7 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
     private static CacheException UnexpectedResponse(IMessage? response)
     {
         if (response == null)
-            return new CacheException(
+            return new ConnectionClosedException(
                 "No response received from the server (the connection was closed). This often means an " +
                 "SSL mismatch between client and server - check that this connector's useSsl setting matches " +
                 "ServerSettings:UseSsl on the server.");
