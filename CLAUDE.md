@@ -66,12 +66,22 @@ ProfilingTool       <- perf-testing console app; hosts FrozenCache.Server's Host
                        data through the real TCP path. Depends on CacheClient, FrozenCache.Server, Messages,
                        PersistentStore.
 PerfTest            <- another standalone perf/load console app driving a running server (localhost:5123 by
-                       default, see --server). Depends on CacheClient, Messages only.
+                       default, see --server), or a cluster of replicas through the Aggregator (--servers
+                       host1:port1+host2:port2). Depends on CacheClient, Messages only.
 UnitTests           <- NUnit tests; depends on CacheClient, FrozenCache.Server, Messages, PersistentStore -
                        deliberately not on the FrozenCache exe itself.
 Dashboard           <- Angular 21 app (not a .NET project), served by the FrozenCache exe at /dashboard. Talks to the
                        server only through its HTTP API (GET /collections, /collections/{name}/monitoring).
 ```
+
+`rust/` (repo root, outside the .NET solution) is a Cargo workspace porting the client to Rust:
+`frozencache-client` (the `Connector`; `Aggregator`/`ConnectorPool` not ported yet) and `perftest` (same CLI and
+output as the .NET PerfTest). It must stay wire-compatible with the .NET server: `frozencache-client/src/protocol.rs`
+mirrors `Messages` (MessageType values, the field order of every `[Key(n)]` DTO, the 8-byte framing, the feed/stream
+batch format), and its tests assert byte-for-byte equality with encodings produced by the .NET code. **Any change to
+`Messages` (new message type, new or reordered field, batch format) must be mirrored there**, with the reference
+vectors regenerated from .NET. `cargo test` runs the protocol tests; with `FROZENCACHE_TEST_SERVER=host:port` (and
+`FROZENCACHE_TEST_TLS=1` for a TLS server) it also runs end-to-end tests against a running .NET server.
 
 The `FrozenCache` exe's build runs `npm ci` (if `node_modules` is missing) and `npm run build` in `Dashboard/`
 (target `BuildDashboard`, incremental on the dashboard sources), then ships `dist/FrozenCacheDashboard/browser` as a
@@ -149,7 +159,8 @@ tests and tools can depend on the server engine without dragging in the web host
   serialize/deserialize/key-extraction on top of the raw `byte[]`/`Item` protocol — register a type before
   feeding/querying it by type.
 - Secondary keys: `Aggregator.QueryBySecondaryKey<T>` (list), `StreamBySecondaryKey<T>` and
-  `StreamRawDataBySecondaryKey` (streams). Retries go to another replica only on connection failures
+  `StreamRawDataBySecondaryKey` (streams); `StreamAllData` streams a whole collection the same way (one replica,
+  shared `StreamFromOneReplica`). Retries go to another replica only on connection failures
   (`IsConnectionFailure`: I/O errors and `ConnectionClosedException`, the `CacheException` subtype `Connector` throws
   when the server closes the connection instead of answering) — never on server-reported `CacheException`s, and for
   streams only before the first result. A stream not read to its end leaves unread batches on its connection, so it

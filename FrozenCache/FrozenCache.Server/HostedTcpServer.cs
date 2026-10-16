@@ -170,7 +170,12 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
                 switch (message)
                 {
                     case BeginFeedRequest beginFeedRequest:
-                        await ProcessFeedSession(beginFeedRequest, stream);
+                        if (!await ProcessFeedSession(beginFeedRequest, stream))
+                        {
+                            // the rest of the client's batches can't be read as messages
+                            Logger.LogInformation("Closing the connection after a failed feed session");
+                            return;
+                        }
                         break;
                     case CreateCollectionRequest createCollectionRequest:
                         await ProcessCreateCollection(createCollectionRequest, stream, cancellationToken);
@@ -519,9 +524,14 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
         }
     }
 
-    private async Task ProcessFeedSession(BeginFeedRequest beginRequest, Stream stream)
+    /// <returns>
+    ///     False when the connection must be closed: a feed that fails once the client streams its batches leaves
+    ///     unread batches on the connection, which can't be read as messages.
+    /// </returns>
+    private async Task<bool> ProcessFeedSession(BeginFeedRequest beginRequest, Stream stream)
     {
         Task? feederTask = null;
+        var streaming = false;
 
         try
         {
@@ -548,6 +558,7 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
 
             // If we reach this point, we can start the feeding process. Let the client know about it
             await stream.WriteMessageAsync(new StatusResponse(), CancellationToken.None);
+            streaming = true;
 
             Logger.LogInformation("Begin feeding collection {Collection}. New version is {Version}",
                 beginRequest.CollectionName, beginRequest.CollectionVersion);
@@ -557,10 +568,17 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
             feederTask = StartCollectionFeeder(beginRequest.CollectionName, beginRequest.CollectionVersion,
                 internalChannel);
 
+            // Stop reading as soon as the feeder fails: nothing consumes the channel any more, so once it's full
+            // WriteAsync would wait forever - and the client with it, its batches no longer read.
+            var feederFailed = new CancellationTokenSource();
+            _ = feederTask.ContinueWith(_ => feederFailed.Cancel(), CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+
             try
             {
                 foreach (var item in ReadItems(stream))
-                    await internalChannel.Writer.WriteAsync(item, CancellationToken.None);
+                    await internalChannel.Writer.WriteAsync(item, feederFailed.Token);
 
                 internalChannel.Writer.Complete();
             }
@@ -578,11 +596,11 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
             Logger.LogInformation("Feeding collection {Collection} completed", beginRequest.CollectionName);
 
             await stream.WriteMessageAsync(new StatusResponse(), CancellationToken.None);
+            return true;
         }
         catch (Exception e)
         {
-            Logger.LogError("Error while processing feed session for collection {Collection} {Version}: {Message}",
-                beginRequest.CollectionName, beginRequest.CollectionVersion, e.Message);
+            var error = e;
 
             if (feederTask != null)
                 try
@@ -591,13 +609,23 @@ public class HostedTcpServer(IDataStore store, ILogger<HostedTcpServer> logger, 
                     // before this session ends; the feeder already logs its own failure.
                     await feederTask;
                 }
+                catch (Exception feederError) when (e is OperationCanceledException)
+                {
+                    // reading was stopped because the feeder failed: its error is the one to report
+                    error = feederError;
+                }
                 catch
                 {
                     // ignored, already logged by the feeder task
                 }
 
-            await stream.WriteMessageAsync(new StatusResponse { ErrorMessage = e.Message, Success = false },
+            Logger.LogError("Error while processing feed session for collection {Collection} {Version}: {Message}",
+                beginRequest.CollectionName, beginRequest.CollectionVersion, error.Message);
+
+            await stream.WriteMessageAsync(new StatusResponse { ErrorMessage = error.Message, Success = false },
                 CancellationToken.None);
+
+            return !streaming;
         }
     }
 

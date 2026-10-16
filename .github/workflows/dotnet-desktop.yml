@@ -41,6 +41,79 @@ jobs:
         name: coverage
         path: coverage/*.xml
 
+  # Rust client (rust/): lint, protocol tests, then end-to-end tests against the real .NET server, plain and TLS
+  rust:
+
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: rust
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 10.0.x
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy, rustfmt
+
+    - name: Cache Rust build
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: rust
+
+    - name: Check formatting
+      run: cargo fmt --all -- --check
+
+    - name: Clippy
+      run: cargo clippy --workspace --all-targets -- -D warnings
+
+    - name: Protocol tests
+      run: cargo test --workspace
+
+    - name: Start .NET servers (plain and TLS)
+      working-directory: .
+      run: |
+        dotnet build FrozenCache/FrozenCache/FrozenCache.csproj -c Release -p:SkipDashboard=true
+        dotnet dev-certs https -ep "$RUNNER_TEMP/test-cert.pfx" -p test-password
+        SERVER=FrozenCache/FrozenCache/bin/Release/net10.0/FrozenCache
+        start_server() { # port http-port ssl
+          ServerSettings__Port=$1 ServerSettings__UseSsl=$3 \
+          ServerSettings__SslCertificatePath="$RUNNER_TEMP/test-cert.pfx" ServerSettings__SslCertificatePassword=test-password \
+          Kestrel__Endpoints__MyHttpEndpoint__Url=http://localhost:$2 \
+          PathSettings__DataPath="$RUNNER_TEMP/data-$1" PathSettings__LogPath="$RUNNER_TEMP/logs-$1" \
+          nohup "$SERVER" > "$RUNNER_TEMP/server-$1.log" 2>&1 &
+        }
+        start_server 5123 5213 false
+        start_server 5124 5214 true
+        for port in 5123 5124; do
+          for i in $(seq 1 60); do nc -z localhost $port && break; sleep 1; done
+          nc -z localhost $port || { cat "$RUNNER_TEMP/server-$port.log"; exit 1; }
+        done
+
+    - name: End-to-end tests (plain)
+      run: cargo test -p frozencache-client --test dotnet_server
+      env:
+        FROZENCACHE_TEST_SERVER: localhost:5123
+
+    - name: End-to-end tests (TLS)
+      run: cargo test -p frozencache-client --test dotnet_server
+      env:
+        FROZENCACHE_TEST_SERVER: localhost:5124
+        FROZENCACHE_TEST_TLS: "1"
+
+    - name: Server logs
+      if: failure()
+      working-directory: .
+      run: cat "$RUNNER_TEMP"/server-*.log
+
   publish-aot:
     needs: test
 

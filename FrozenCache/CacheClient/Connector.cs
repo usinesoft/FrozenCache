@@ -173,34 +173,49 @@ public sealed class Connector(string host, int port, bool useSsl = false, bool v
             // Prepare the batch of items to feed
             batch = ArrayPool<FeedItem>.Shared.Rent(maxMessagesPerBatch);
 
-            int batchSize = 0;
-            foreach (var item in items)
+            try
             {
-                var feedItem = new FeedItem
+                int batchSize = 0;
+                foreach (var item in items)
                 {
-                    Data = item.Data,
-                    Keys = item.Keys
-                };
+                    var feedItem = new FeedItem
+                    {
+                        Data = item.Data,
+                        Keys = item.Keys
+                    };
 
-                batch[batchSize++] = feedItem;
-                if (batchSize >= maxMessagesPerBatch)
-                {
-                    _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize), maxBatchSize);
-                    batchSize = 0;
+                    batch[batchSize++] = feedItem;
+                    if (batchSize >= maxMessagesPerBatch)
+                    {
+                        _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize), maxBatchSize);
+                        batchSize = 0;
+                    }
+
                 }
 
+                // Write any remaining items in the batch
+                _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize));
+
+                if (batchSize != 0) // if the last one was not empty, we need to write an empty batch as end marker
+                {
+                    // write an empty batch to mark the end of stream
+                    _batchSerializer.Serialize(writer, Array.Empty<FeedItem>());
+                }
             }
-
-            // Write any remaining items in the batch
-            _batchSerializer.Serialize(writer, batch.AsSpan(0, batchSize));
-
-            if (batchSize != 0) // if the last one was not empty, we need to write an empty batch as end marker
+            catch (IOException e)
             {
-                // write an empty batch to mark the end of stream
-                _batchSerializer.Serialize(writer, Array.Empty<FeedItem>());
+                // The server closes the connection when the feed fails on its side (e.g. it can't write the new
+                // version), right after sending the reason. Closing with this upload still unread resets the
+                // connection, which often discards that reason before it can be read (always on Windows).
+                if (await _stream.ReadMessageAsync(CancellationToken.None) is StatusResponse { Success: false } failure)
+                    throw new CacheException($"Failed to feed collection: {failure.ErrorMessage}");
+
+                throw new CacheException(
+                    $"Failed to feed collection: the server {Address} closed the connection during the upload, " +
+                    $"probably because the feed failed on its side - its log gives the reason ({e.Message})");
             }
         }
-        
+
         finally
         {
             if(batch.Length > 0)

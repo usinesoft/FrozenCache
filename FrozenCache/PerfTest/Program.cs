@@ -29,24 +29,27 @@ namespace PerfTest
         private static readonly string Usage = $"""
             Usage: PerfTest [feed|read|stream|secondary] [options]
 
-              feed       create the collection (if needed) and feed a new version named after the current time (yyyyMMdd-HHmmss)
+              feed       create the collection (if needed) and feed a new version named after the current time (UTC, yyyyMMdd_HHmmss)
               read       query random primary keys in batches of 1, 5, 10 and 100 (default action)
-              stream     stream the whole collection
+              stream     stream the whole collection (from one replica with --servers)
               secondary  query random secondary key values through the Aggregator, sequentially then {Concurrency} at a time;
                          each value matches about size/{SecondaryKeyGroups} items
 
             Options:
-              --server <host:port>   server to connect to (default {DefaultServer})
-              --collection <name>    collection name (default {DefaultCollection})
-              --size <count>         number of items to feed; feed only (default {DefaultSize})
-              --queries <count>      number of queries per run; secondary only (default {DefaultQueries})
-              --ssl                  connect over TLS (server certificate is not validated)
+              --server <host:port>          server to connect to (default {DefaultServer})
+              --servers <host:port+...>     a cluster of replicas, used through the Aggregator: feeds go to every
+                                            replica, queries and streams are spread across them (instead of --server)
+              --collection <name>           collection name (default {DefaultCollection})
+              --size <count>                number of items to feed; feed only (default {DefaultSize})
+              --queries <count>             number of queries per run; secondary only (default {DefaultQueries})
+              --ssl                         connect over TLS (server certificate is not validated)
             """;
 
         static async Task<int> Main(string[] args)
         {
             string action = "read";
-            string server = DefaultServer;
+            string? server = null;
+            string? servers = null;
             string collection = DefaultCollection;
             int size = DefaultSize;
             int queries = DefaultQueries;
@@ -69,6 +72,9 @@ namespace PerfTest
                         break;
                     case "--server" when i + 1 < args.Length:
                         server = args[++i];
+                        break;
+                    case "--servers" when i + 1 < args.Length:
+                        servers = args[++i];
                         break;
                     case "--collection" when i + 1 < args.Length:
                         collection = args[++i];
@@ -94,6 +100,28 @@ namespace PerfTest
                 Console.WriteLine(Usage);
                 return 1;
             }
+
+            if (server != null && servers != null)
+            {
+                Console.WriteLine("Use either --server or --servers, not both");
+                return 1;
+            }
+
+            if (servers != null)
+            {
+                if (!TryParseServers(servers, out var cluster))
+                {
+                    Console.WriteLine($"Invalid servers '{servers}', expected host1:port1+host2:port2+...");
+                    return 1;
+                }
+
+                Console.WriteLine($"Action:{action}, Servers:{string.Join("+", cluster.Select(Address))}, " +
+                                  $"Collection:{collection}, Ssl:{useSsl}");
+
+                return await RunOnCluster(action, cluster, useSsl, collection, size, queries);
+            }
+
+            server ??= DefaultServer;
 
             if (!TryParseServer(server, out var host, out var port))
             {
@@ -123,15 +151,18 @@ namespace PerfTest
                 }
                 else if (action == "stream")
                 {
-                    await StreamData(connector, collection);
-                }
-                else if (action == "secondary")
-                {
-                    await QueryBySecondaryKey(connector, host, port, useSsl, collection, queries);
+                    await StreamData(connector.StreamAllData(collection));
                 }
                 else
                 {
-                    await ReadData(connector, collection);
+                    var info = await GetNonEmptyCollection(connector, collection);
+                    if (info == null)
+                        return 0;
+
+                    if (action == "secondary")
+                        await QueryBySecondaryKey([(host, port)], useSsl, collection, info, queries);
+                    else
+                        await ReadData(ids => connector.QueryByPrimaryKey(collection, ids), info.Count);
                 }
             }
             catch (CacheException e)
@@ -164,6 +195,161 @@ namespace PerfTest
         }
 
         /// <summary>
+        /// "host1:port1+host2:port2+...", each part as accepted by <see cref="TryParseServer"/>; at least one, no
+        /// duplicates.
+        /// </summary>
+        private static bool TryParseServers(string servers, out (string Host, int Port)[] cluster)
+        {
+            var parsed = new List<(string Host, int Port)>();
+
+            foreach (var part in servers.Split('+', StringSplitOptions.TrimEntries))
+            {
+                if (!TryParseServer(part, out var host, out var port))
+                {
+                    cluster = [];
+                    return false;
+                }
+                parsed.Add((host, port));
+            }
+
+            cluster = parsed.ToArray();
+            return cluster.Length > 0 &&
+                   cluster.Distinct().Count() == cluster.Length;
+        }
+
+        private static string Address((string Host, int Port) server) => $"{server.Host}:{server.Port}";
+
+        /// <summary>
+        /// The same actions on a cluster of replicas, through the Aggregator (without local cache).
+        /// </summary>
+        private static async Task<int> RunOnCluster(string action, (string Host, int Port)[] cluster, bool useSsl,
+            string collection, int size, int queries)
+        {
+            try
+            {
+                // certificate validation is skipped, as for a single server
+                var aggregator = new Aggregator(Concurrency, useSsl, false, 10_000, cluster);
+
+                if (action == "feed")
+                    return await FeedCluster(aggregator, cluster, collection, size) ? 0 : 1;
+
+                var info = await DescribeCluster(aggregator, cluster, collection);
+                if (info == null)
+                    return 1;
+
+                if (action == "stream")
+                    await StreamData(aggregator.StreamAllData(collection)); // from one replica, like any client
+                else if (action == "secondary")
+                    await QueryBySecondaryKey(cluster, useSsl, collection, info, queries);
+                else
+                    await ReadData(ids => aggregator.QueryRawDataByPrimaryKey(collection, ids), info.Count);
+
+                return 0;
+            }
+            catch (Exception e) when (e is CacheException or InvalidOperationException)
+            {
+                Console.WriteLine(e.Message);
+                return 1;
+            }
+        }
+
+        /// <summary>
+        /// Prints what every replica reports for the collection, and returns the description to test against:
+        /// null (with a message) if no replica is connected, or the collection is missing or empty.
+        /// </summary>
+        private static async Task<CollectionInformation?> DescribeCluster(Aggregator aggregator,
+            (string Host, int Port)[] cluster, string collection)
+        {
+            // one description per replica, in the order of the servers; null for a replica that isn't connected
+            var descriptions = await aggregator.GetCollectionsDescription();
+
+            CollectionInformation? reference = null;
+            var connected = 0;
+            var inSync = true;
+
+            for (var i = 0; i < cluster.Length; i++)
+            {
+                var name = Address(cluster[i]);
+                var description = descriptions[i];
+                if (description == null)
+                {
+                    Console.WriteLine($"  {name}: not connected");
+                    continue;
+                }
+
+                connected++;
+                var info = description.Collections.FirstOrDefault(c => c.Name == collection);
+                if (info == null)
+                {
+                    Console.WriteLine($"  {name}: no collection '{collection}'");
+                    inSync = false;
+                    continue;
+                }
+
+                Console.WriteLine($"  {name}: version {info.LastVersion}, {info.Count:N0} items");
+
+                if (reference == null)
+                    reference = info;
+                else if (info.LastVersion != reference.LastVersion || info.Count != reference.Count)
+                    inSync = false;
+            }
+
+            if (connected == 0)
+            {
+                Console.WriteLine("Failed to connect to any server");
+                return null;
+            }
+
+            if (connected < cluster.Length)
+                Console.WriteLine($"Warning: {cluster.Length - connected} of {cluster.Length} servers are not connected");
+
+            if (!inSync)
+                Console.WriteLine("Warning: the replicas don't have the same version of the collection");
+
+            if (reference == null || reference.Count == 0)
+            {
+                Console.WriteLine($"Collection '{collection}' not found or empty");
+                return null;
+            }
+
+            return reference;
+        }
+
+        /// <summary>
+        /// Feeds every connected replica in parallel through the Aggregator, which names the version (UTC,
+        /// yyyyMMdd_HHmmss). False if no replica is connected.
+        /// </summary>
+        private static async Task<bool> FeedCluster(Aggregator aggregator, (string Host, int Port)[] cluster,
+            string collection, int count)
+        {
+            var connected = (await aggregator.GetCollectionsDescription()).Count(d => d != null);
+            if (connected == 0)
+            {
+                Console.WriteLine("Failed to connect to any server");
+                return false;
+            }
+
+            await aggregator.DeclareCollection(collection, "id", SecondaryIndex);
+
+            // the Aggregator feeds typed objects: Item itself, serialized as its raw data, keyed by its own keys
+            aggregator.RegisterTypedCollection<Item>(collection,
+                item => item.Data,
+                data => new Item(data),
+                item => item.Keys[0],
+                item => item.Keys[1]);
+
+            Console.WriteLine($"Feeding {count} items into '{collection}' on {connected} of {cluster.Length} servers");
+
+            var watch = Stopwatch.StartNew();
+            await aggregator.FeedCollection(collection, GetItems(count, 100, 500));
+            watch.Stop();
+            Console.WriteLine($"Feeding {count} items items took {watch.ElapsedMilliseconds} ms");
+
+            await DescribeCluster(aggregator, cluster, collection);
+            return true;
+        }
+
+        /// <summary>
         /// The collection's description, or null (with a message) if it doesn't exist or is empty.
         /// </summary>
         private static async Task<CollectionInformation?> GetNonEmptyCollection(Connector connector, string collection)
@@ -180,52 +366,44 @@ namespace PerfTest
             return info;
         }
 
-        private static async Task ReadData(Connector connector, string collection)
+        /// <param name="query">A query by primary keys: through a Connector, or through the Aggregator.</param>
+        /// <param name="maxId">Items are fed with primary keys 0..count-1, so the collection size gives the key range.</param>
+        private static async Task ReadData(Func<long[], Task<List<byte[]>>> query, int maxId)
         {
-            // items are fed with primary keys 0..count-1, so the collection size gives the key range to query
-            var info = await GetNonEmptyCollection(connector, collection);
-            if (info == null)
-                return;
-
-            int maxId = info.Count;
-
-            await QueryByBatch(connector, collection, 1, 100, maxId);
+            await QueryByBatch(query, 1, 100, maxId);
             var watch = Stopwatch.StartNew();
-            await QueryByBatch(connector, collection, 1, 100, maxId);
+            await QueryByBatch(query, 1, 100, maxId);
             watch.Stop();
             Console.WriteLine($"Reading 100 objects one by one took {watch.ElapsedMilliseconds} ms");
 
-            await QueryByBatch(connector, collection, 5, 100, maxId);
+            await QueryByBatch(query, 5, 100, maxId);
             watch = Stopwatch.StartNew();
-            await QueryByBatch(connector, collection, 5, 100, maxId);
+            await QueryByBatch(query, 5, 100, maxId);
             watch.Stop();
             Console.WriteLine($"Reading 100 times 5 objects took {watch.ElapsedMilliseconds} ms");
 
-            await QueryByBatch(connector, collection, 10, 100, maxId);
+            await QueryByBatch(query, 10, 100, maxId);
             watch = Stopwatch.StartNew();
-            await QueryByBatch(connector, collection, 10, 100, maxId);
+            await QueryByBatch(query, 10, 100, maxId);
             watch.Stop();
             Console.WriteLine($"Reading 100 times 10 objects took {watch.ElapsedMilliseconds} ms");
 
-            await QueryByBatch(connector, collection, 100, 100, maxId);
+            await QueryByBatch(query, 100, 100, maxId);
             watch = Stopwatch.StartNew();
-            await QueryByBatch(connector, collection, 100, 100, maxId);
+            await QueryByBatch(query, 100, 100, maxId);
             watch.Stop();
             Console.WriteLine($"Reading 100 times 100 objects took {watch.ElapsedMilliseconds} ms");
         }
 
-        private static async Task QueryBySecondaryKey(Connector connector, string host, int port, bool useSsl,
-            string collection, int queries)
+        /// <param name="servers">One server, or the replicas of a cluster.</param>
+        private static async Task QueryBySecondaryKey((string Host, int Port)[] servers, bool useSsl, string collection,
+            CollectionInformation info, int queries)
         {
-            var info = await GetNonEmptyCollection(connector, collection);
-            if (info == null)
-                return;
-
             // items are fed with secondary key id % SecondaryKeyGroups, so these are the values that exist
             var groups = Math.Min(SecondaryKeyGroups, info.Count);
             Console.WriteLine($"Each '{SecondaryIndex}' value matches about {info.Count / groups:N0} items");
 
-            var aggregator = new Aggregator(Concurrency, useSsl, false, 10_000, (host, port));
+            var aggregator = new Aggregator(Concurrency, useSsl, false, 10_000, servers);
 
             await RunSecondaryKeyQueries(aggregator, collection, groups, Math.Max(1, queries / 10), 1); // warm-up
 
@@ -286,13 +464,14 @@ namespace PerfTest
             return new SecondaryKeyRun(queries, items, bytes, watch.Elapsed, latencies);
         }
 
-        private static async Task StreamData(Connector connector, string collection)
+        /// <param name="documents">The collection's documents: through a Connector, or through the Aggregator.</param>
+        private static async Task StreamData(IAsyncEnumerable<(long PrimaryKey, byte[] Data)> documents)
         {
             var watch = Stopwatch.StartNew();
 
             long count = 0;
 
-            await foreach (var _ in connector.StreamAllData(collection))
+            await foreach (var _ in documents)
             {
                 count++;
 
@@ -306,28 +485,24 @@ namespace PerfTest
             Console.WriteLine($"Streamed {count} items in {watch.ElapsedMilliseconds} ms");
         }
 
-        private static async Task QueryByBatch(Connector connector, string collection, int batchSize, int iterations, int maxId)
+        private static async Task QueryByBatch(Func<long[], Task<List<byte[]>>> query, int batchSize, int iterations,
+            int maxId)
         {
             Random random = new Random();
-            
+
             long[] ids = new long[batchSize];
 
             for (int i = 0; i < batchSize; i++)
                 ids[i] = random.NextInt64(maxId);
 
-
-            var watch = Stopwatch.StartNew();
             for (int i = 0; i < iterations; i++)
             {
-               var result =  await connector.QueryByPrimaryKey(collection, ids);
-               if (result.Count != batchSize)
-               {
-                   throw new Exception($"Expected {batchSize} items, but got {result.Count} items");
-               }
+                var result = await query(ids);
+                if (result.Count != batchSize)
+                {
+                    throw new Exception($"Expected {batchSize} items, but got {result.Count} items");
+                }
             }
-
-            watch.Stop();
-
         }
 
 
@@ -348,8 +523,10 @@ namespace PerfTest
             {
                 await connector.CreateCollection(collection, "id", "name");
 
-                // a time-based version is unique per run, so repeated feeds never collide with an existing version
-                string version = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+                // a time-based version is unique per run, so repeated feeds never collide with an existing version;
+                // UTC and "_", like the Aggregator: one collection can be fed both ways, and the server orders
+                // versions by name
+                string version = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
                 Console.WriteLine($"Feeding {count} items into '{collection}' as version {version}");
 
                 var watch = Stopwatch.StartNew();
@@ -361,7 +538,7 @@ namespace PerfTest
             catch (Exception e)
             {
                 Console.WriteLine(e.Message);
-                
+
             }
 
         }

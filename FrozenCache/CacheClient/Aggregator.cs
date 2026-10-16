@@ -233,17 +233,29 @@ public class Aggregator
         
         await Parallel.ForEachAsync(_pools.Where(x=>x.IsConnected),  async (p, _) =>
         {
-            var connector = await p.Get();
-            try
-            {
-                await connector.CreateCollection(collectionName, primaryKey, otherIndexes);
-            }
-            catch (SocketException )
-            {
-                p.MarkAsNotConnected();
-                throw;
-            }
+            await WithConnector(p, connector => connector.CreateCollection(collectionName, primaryKey, otherIndexes));
         });
+    }
+
+    /// <summary>
+    /// Runs a request on a connector of <paramref name="pool"/>, which is then returned to it - or, if the
+    /// connection failed, closed and the pool marked as disconnected (its watchdog reconnects it).
+    /// </summary>
+    private static async Task WithConnector(ConnectorPool pool, Func<Connector, Task> request)
+    {
+        var connector = await pool.Get();
+        try
+        {
+            await request(connector);
+        }
+        catch (Exception e) when (IsConnectionFailure(e))
+        {
+            connector.Dispose();
+            pool.MarkAsNotConnected();
+            throw;
+        }
+
+        pool.Return(connector);
     }
 
     /// <summary>
@@ -258,17 +270,7 @@ public class Aggregator
 
         await Parallel.ForEachAsync(_pools.Where(x => x.IsConnected), async (p, _) =>
         {
-            var connector = await p.Get();
-            try
-            {
-                await connector.DropCollection(collectionName);
-            }
-            catch (SocketException)
-            {
-
-                p.MarkAsNotConnected();
-                throw;
-            }
+            await WithConnector(p, connector => connector.DropCollection(collectionName));
         });
 
     }
@@ -443,15 +445,36 @@ public class Aggregator
     /// <param name="indexName">Name of an index declared by <see cref="DeclareCollection"/>.</param>
     /// <param name="keyValue">Key value, converted exactly like the key generator registered for this index.</param>
     /// <param name="cancellationToken">Checked between results.</param>
-    public async IAsyncEnumerable<(long PrimaryKey, byte[] Data)> StreamRawDataBySecondaryKey(string collection,
-        string indexName, long keyValue, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public IAsyncEnumerable<(long PrimaryKey, byte[] Data)> StreamRawDataBySecondaryKey(string collection,
+        string indexName, long keyValue, CancellationToken cancellationToken = default) =>
+        StreamFromOneReplica(collection,
+            connector => connector.StreamBySecondaryIndex(collection, indexName, keyValue), cancellationToken);
+
+    /// <summary>
+    /// Streams every document of the collection's active version, as raw data paired with its primary key. Same
+    /// behavior as <see cref="StreamRawDataBySecondaryKey"/>: the documents come from a single replica, preferring
+    /// those on the latest version, with failover before the first document.
+    /// </summary>
+    /// <param name="collection">Collection name.</param>
+    /// <param name="cancellationToken">Checked between documents.</param>
+    public IAsyncEnumerable<(long PrimaryKey, byte[] Data)> StreamAllData(string collection,
+        CancellationToken cancellationToken = default) =>
+        StreamFromOneReplica(collection, connector => connector.StreamAllData(collection), cancellationToken);
+
+    /// <summary>
+    /// Runs a stream opened by <paramref name="open"/> on one replica: see <see cref="StreamRawDataBySecondaryKey"/>
+    /// for the failover and early-stop rules.
+    /// </summary>
+    private async IAsyncEnumerable<(long PrimaryKey, byte[] Data)> StreamFromOneReplica(string collection,
+        Func<Connector, IAsyncEnumerable<(long PrimaryKey, byte[] Data)>> open,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         while (true)
         {
             var connector = await Get(collection);
             var pool = _pools.FirstOrDefault(p => p.Address == connector.Address);
 
-            var results = connector.StreamBySecondaryIndex(collection, indexName, keyValue).GetAsyncEnumerator(CancellationToken.None);
+            var results = open(connector).GetAsyncEnumerator(CancellationToken.None);
 
             var completed = false;
             var connectionFailed = false;
@@ -594,7 +617,9 @@ public class Aggregator
     public async Task FeedCollection<T>(string collectionName, IEnumerable<T> items)
     {
         
-        string newVersion = DateTime.UtcNow.ToString("yyyyMMdd_hhmmss");
+        // 24-hour clock: the server orders versions by name, and with "hh" a feed at 13:00 ("_01...") would sort
+        // before one from the same morning and be rejected as older
+        string newVersion = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
 
         // generate once , feed all in parallel
 
@@ -617,60 +642,104 @@ public class Aggregator
             connectors[i] = await connected[i].Get();
         }
 
-        // Create tuples of channels and connectors for parallel processing
-        (Channel<Item>, Connector)[] chCxTuples = channels.Zip(connectors).ToArray();
+        // Cancelled by the first replica whose feed fails. The producer below hands every item to every replica's
+        // bounded channel: without this, once the failed replica's channel is full, it would wait forever - and
+        // so would every other replica.
+        using var feedFailed = new CancellationTokenSource();
+        Exception? firstFailure = null;
 
-        try
+        // One feeder per replica, uploading the items of its channel
+        var feeders = new Task[connected.Length];
+        for (int i = 0; i < connected.Length; i++)
         {
-
-            // Feed the items to each connector from a consumer task that reads from the corresponding channel
-            var feederTask = Task.Run(async () =>
+            var connector = connectors[i];
+            var reader = channels[i].Reader;
+            feeders[i] = Task.Run(async () =>
             {
-                await Parallel.ForEachAsync(chCxTuples, async (chcx, _) =>
+                try
                 {
-
-                    var connector = chcx.Item2;
-                    var reader = chcx.Item1.Reader;
-                    var packedSequence =  reader.ReadAllAsync(CancellationToken.None).ToBlockingEnumerable(CancellationToken.None);
-
+                    var packedSequence = reader.ReadAllAsync(CancellationToken.None)
+                        .ToBlockingEnumerable(CancellationToken.None);
 
                     await connector.FeedCollection(collectionName, newVersion, packedSequence);
-                
-                });
-            });
-
-            // Pack the items once and write them to the channels
-
-            foreach (var item in PackTypedItems(items))
-            {
-                foreach (var chanel in channels)
-                {
-                    await chanel.Writer.WriteAsync(item);
                 }
+                catch (Exception e)
+                {
+                    Interlocked.CompareExchange(ref firstFailure,
+                        new CacheException($"Feeding {collectionName} failed on {connector.Address}: {e.Message}"),
+                        null);
+                    await feedFailed.CancelAsync();
+                    throw;
+                }
+            });
+        }
+
+        var succeeded = false;
+        try
+        {
+            try
+            {
+                // Pack the items once and write them to the channels
+                foreach (var item in PackTypedItems(items))
+                {
+                    foreach (var channel in channels)
+                    {
+                        await channel.Writer.WriteAsync(item, feedFailed.Token);
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                // A replica failed, or the items couldn't be produced: abort the feed on every replica. Completing
+                // the channels with an error (not normally) stops each upload without its end marker, so that no
+                // server commits a partial version.
+                foreach (var channel in channels)
+                    channel.Writer.TryComplete(e);
+
+                await WhenAllIgnoringErrors(feeders);
+
+                throw e is OperationCanceledException && firstFailure != null ? firstFailure : e;
             }
 
             // Complete the writers to signal that no more items will be written
-            foreach (var chanel in channels)
-            {
-                chanel.Writer.Complete();
-            }
+            foreach (var channel in channels)
+                channel.Writer.Complete();
 
             // Wait for all feeders to complete
-            await feederTask;
+            await WhenAllIgnoringErrors(feeders);
+            if (firstFailure != null)
+                throw firstFailure;
 
+            succeeded = true;
         }
         finally
         {
-            // Return all connectors to their respective pools
-            foreach (var connector in connectors)
+            for (int i = 0; i < connected.Length; i++)
             {
-                Return(connector);
+                if (succeeded)
+                    connected[i].Return(connectors[i]);
+                else
+                    // possibly in the middle of a feed session: closed (the server then discards the partial
+                    // version) and replaced, never reused
+                    connected[i].Discard(connectors[i]);
             }
         }
 
         
         
 
+    }
+
+    private static async Task WhenAllIgnoringErrors(Task[] tasks)
+    {
+        try
+        {
+            await Task.WhenAll(tasks);
+        }
+        catch
+        {
+            // each failure is recorded by its task; the caller reports the first one
+        }
     }
 
     private readonly Dictionary<Type, Func<object, Item>> _packers = new();

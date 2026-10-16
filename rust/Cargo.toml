@@ -1,0 +1,17 @@
+[workspace]
+resolver = "3"
+members = ["frozencache-client", "perftest"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/usinesoft/FrozenCache"
+
+[workspace.dependencies]
+frozencache-client = { path = "frozencache-client" }
+tokio = { version = "1.53", features = ["net", "io-util", "time", "rt-multi-thread", "macros"] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

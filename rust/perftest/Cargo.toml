@@ -1,0 +1,13 @@
+[package]
+name = "perftest"
+description = "Load/perf test for a FrozenCache server, the Rust counterpart of the .NET PerfTest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+frozencache-client = { workspace = true }
+tokio = { workspace = true }
+clap = { version = "4.6", features = ["derive"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }

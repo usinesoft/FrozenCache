@@ -148,6 +148,32 @@ public class AggregatorSecondaryKeyTest
     }
 
     [Test]
+    public async Task StreamAllDataReturnsEveryDocumentOnceFromOneReplica()
+    {
+        var aggregator = await CreateFedAggregator(2);
+
+        var ids = new List<long>();
+        await foreach (var (primaryKey, data) in aggregator.StreamAllData("products"))
+        {
+            Assert.That(MessagePackSerializer.Deserialize<Product>(data).Id, Is.EqualTo(primaryKey));
+            ids.Add(primaryKey);
+        }
+
+        // one replica's copy, not one per replica
+        Assert.That(ids, Is.EquivalentTo(Enumerable.Range(0, MatchingCount + 10).Select(i => (long)i)));
+
+        // and it fails over like the other streams
+        await _servers[1].StopAsync(CancellationToken.None);
+        for (var i = 0; i < 4; i++)
+        {
+            var count = 0;
+            await foreach (var _ in aggregator.StreamAllData("products"))
+                count++;
+            Assert.That(count, Is.EqualTo(MatchingCount + 10));
+        }
+    }
+
+    [Test]
     public async Task UnmatchedValueReturnsNothing()
     {
         var aggregator = await CreateFedAggregator(1);

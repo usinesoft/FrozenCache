@@ -665,24 +665,40 @@ Load test against a running server.
 ```
 PerfTest [feed|read|stream|secondary] [options]
 
-  feed       create the collection (if needed) and feed a new version named yyyyMMdd-HHmmss
+  feed       create the collection (if needed) and feed a new version named after the current time
+             (UTC, yyyyMMdd_HHmmss)
   read       query random primary keys in batches of 1, 5, 10 and 100 (default)
-  stream     stream the whole collection
+  stream     stream the whole collection (from one replica with --servers)
   secondary  query random secondary key values through the Aggregator, sequentially then 8 at a time;
              each value matches about size/1000 items
 
-  --server <host:port>   server to connect to (default localhost:5123)
-  --collection <name>    collection name (default big)
-  --size <count>         number of items to feed; feed only (default 2000000)
-  --queries <count>      number of queries per run; secondary only (default 200)
-  --ssl                  connect over TLS (server certificate is not validated)
+  --server <host:port>          server to connect to (default localhost:5123)
+  --servers <host:port+...>     a cluster of replicas, used through the Aggregator (instead of --server)
+  --collection <name>           collection name (default big)
+  --size <count>                number of items to feed; feed only (default 2000000)
+  --queries <count>             number of queries per run; secondary only (default 200)
+  --ssl                         connect over TLS (server certificate is not validated)
 ```
 
 ```bash
 PerfTest feed --server cache-01:5123 --collection perf --size 10000000 --ssl
 PerfTest read --server cache-01:5123 --collection perf --ssl
 PerfTest secondary --server cache-01:5123 --collection perf --queries 1000 --ssl
+
+# a cluster of three replicas
+PerfTest feed --servers cache-01:5123+cache-02:5123+cache-03:5123 --collection perf
+PerfTest secondary --servers cache-01:5123+cache-02:5123+cache-03:5123 --collection perf
 ```
+
+With `--servers`, every action goes through the `Aggregator`, without local cache: `feed` feeds
+every connected replica in parallel, `read` and `secondary` spread the queries across the
+replicas that have the latest version, and `stream` streams the collection once, from one of
+them (`Aggregator.StreamAllData`). Each run starts by listing what every replica reports for the
+collection, with a warning for a replica that isn't connected or isn't on the same version.
+
+Feeds through `--server` and `--servers` name versions the same way (UTC, `yyyyMMdd_HHmmss`, as
+the Aggregator does), so a collection can be fed both ways: the server only accepts a version
+whose name sorts after the current one.
 
 `secondary` reports, for each run, the latency per query (p50, p95, max) and the throughput in
 queries, items and megabytes per second. It relies on the secondary key written by `feed`
@@ -693,6 +709,12 @@ item and must be fed again.
 
 Hosts the TCP server in-process with a no-op data store and feeds it through the real TCP path,
 to profile protocol and serialization overhead in isolation from storage.
+
+### Rust client
+
+[`rust/`](rust) contains a Rust client, wire-compatible with this server: the `Connector` and a
+Rust PerfTest with the same command line and output as the .NET one (the `Aggregator` is not
+ported yet). See [rust/README.md](rust/README.md).
 
 ---
 
