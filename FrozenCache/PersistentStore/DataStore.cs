@@ -180,6 +180,27 @@ public sealed class DataStore : IDataStore, IAsyncDisposable, IDisposable
 
         if (!Directory.Exists(path)) throw new CacheException("Collection not found");
 
+        // A feed of this collection - running, or still discarding an aborted version - holds its files open: the
+        // recursive delete below would then fail part way, leaving a collection folder without metadata.json, which
+        // makes every later CreateCollection fail. The feed lock is held until that cleanup is done (quick after an
+        // abort); a feed still running after the wait is reported instead, with nothing touched.
+        var feedLock = GetFeedLock(name);
+        if (!feedLock.Wait(TimeSpan.FromSeconds(10)))
+            throw new CacheException(
+                $"Cannot drop collection '{name}': it is being fed. Please retry once the feed is over.");
+
+        try
+        {
+            DropCollectionUnderFeedLock(name, path);
+        }
+        finally
+        {
+            feedLock.Release();
+        }
+    }
+
+    private void DropCollectionUnderFeedLock(string name, string path)
+    {
         // Fail fast, before touching anything, if a client is actively streaming this collection. Calling
         // Dispose() anyway would "succeed" by deferring - but that silently finishes the job once the stream
         // ends on its own, even though this drop was never actually completed. Checking first keeps a failed

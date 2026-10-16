@@ -73,6 +73,14 @@ pub struct Connector {
     address: String,
     /// `None` once closed.
     stream: Option<BufStream<Box<dyn Transport>>>,
+    /// The document stream in progress, if any: kept here rather than in [`DocumentStream`] so that a stream can
+    /// also be owned together with its connector (by the Aggregator).
+    streaming: Option<StreamState>,
+}
+
+struct StreamState {
+    pending: VecDeque<Document>,
+    finished: bool,
 }
 
 impl Connector {
@@ -98,6 +106,7 @@ impl Connector {
         Ok(Connector {
             address: format!("{host}:{port}"),
             stream: Some(BufStream::new(transport)),
+            streaming: None,
         })
     }
 
@@ -113,8 +122,9 @@ impl Connector {
     }
 
     /// Closes the connection: dropping the transport closes the socket.
-    fn close(&mut self) {
+    pub(crate) fn close(&mut self) {
         self.stream = None;
+        self.streaming = None;
     }
 
     fn io(&mut self) -> Result<&mut BufStream<Box<dyn Transport>>> {
@@ -259,6 +269,42 @@ impl Connector {
         }
     }
 
+    /// First step of a feed session driven batch by batch (by the Aggregator, which encodes the batches once for
+    /// every replica): the server validates the request and acknowledges.
+    pub(crate) async fn begin_feed(&mut self, collection: &str, version: &str) -> Result<()> {
+        let begin = Message::BeginFeedRequest(BeginFeedRequest {
+            collection_name: collection.to_owned(),
+            collection_version: Some(version.to_owned()),
+        });
+        let response = self.request(&begin).await?;
+        expect_success(response, "feed collection")
+    }
+
+    /// Writes one encoded batch of the feed session started by [`Connector::begin_feed`].
+    pub(crate) async fn write_batch(&mut self, batch: &[u8]) -> Result<()> {
+        let result = async {
+            self.io()?.write_all(batch).await?;
+            Ok(())
+        }
+        .await;
+        self.track(result)
+    }
+
+    /// Ends the feed session: the end marker, then the server's answer once the version is stored and indexed.
+    pub(crate) async fn end_feed(&mut self) -> Result<()> {
+        let result = async {
+            let stream = self.io()?;
+            stream.write_all(&END_OF_BATCHES).await?;
+            stream.flush().await?;
+            Ok(())
+        }
+        .await;
+        self.track(result)?;
+
+        let response = self.receive().await?;
+        expect_success(response, "feed collection")
+    }
+
     /// Documents whose primary key is one of `keys`, in no particular order; a key matching no document adds
     /// nothing. The request must stay under the server's 1 MB message limit, about 100,000 keys.
     pub async fn query_by_primary_key(
@@ -328,14 +374,86 @@ impl Connector {
         request: &Message,
         operation: &'static str,
     ) -> Result<DocumentStream<'_>> {
+        self.begin_stream(request, operation).await?;
+        Ok(DocumentStream { connector: self })
+    }
+
+    /// Sends a stream request; once acknowledged, the documents are read with [`Connector::next_document`].
+    pub(crate) async fn begin_stream(
+        &mut self,
+        request: &Message,
+        operation: &'static str,
+    ) -> Result<()> {
         // the server acknowledges (or reports an error) before switching to batches
         let response = self.request(request).await?;
         expect_success(response, operation)?;
-        Ok(DocumentStream {
-            connector: self,
+        self.streaming = Some(StreamState {
             pending: VecDeque::new(),
             finished: false,
-        })
+        });
+        Ok(())
+    }
+
+    /// The next document of the stream in progress; `None` at its end, or after an error.
+    pub(crate) async fn next_document(&mut self) -> Option<Result<Document>> {
+        loop {
+            let state = self.streaming.as_mut()?;
+            if let Some(document) = state.pending.pop_front() {
+                return Some(Ok(document));
+            }
+            if state.finished {
+                self.streaming = None;
+                return None;
+            }
+            if let Err(e) = self.read_batch().await {
+                self.close();
+                return Some(Err(e));
+            }
+        }
+    }
+
+    /// Ends the stream in progress. If it wasn't read to its end, unread data remains: the connection is closed,
+    /// which also stops the server's streaming.
+    pub(crate) fn abandon_stream(&mut self) {
+        if let Some(state) = &self.streaming
+            && !(state.finished && state.pending.is_empty())
+        {
+            self.close();
+        }
+        self.streaming = None;
+    }
+
+    async fn read_batch(&mut self) -> Result<()> {
+        let result = async {
+            let mut header = [0; HEADER_SIZE];
+            self.read_exact(&mut header).await?;
+
+            let Some((size, count)) = decode_batch_header(header)? else {
+                if let Some(state) = self.streaming.as_mut() {
+                    state.finished = true;
+                }
+                return Ok(());
+            };
+
+            let mut payload = vec![0; size];
+            self.read_exact(&mut payload).await?;
+
+            let documents = decode_batch_payload(&payload, count)?
+                .into_iter()
+                .map(|(keys, data)| {
+                    let primary_key = *keys
+                        .first()
+                        .ok_or_else(|| Error::Protocol("streamed document without a key".into()))?;
+                    Ok(Document { primary_key, data })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            if let Some(state) = self.streaming.as_mut() {
+                state.pending.extend(documents);
+            }
+            Ok(())
+        }
+        .await;
+        self.track(result)
     }
 
     /// True if the server answered within [`DEFAULT_PING_TIMEOUT`].
@@ -365,6 +483,12 @@ impl Connector {
 
     async fn send(&mut self, message: &Message) -> Result<()> {
         self.io()?;
+        if self.streaming.is_some() {
+            // only reachable from inside the crate: a DocumentStream borrows the connector
+            return Err(Error::Protocol(
+                "a stream is in progress on this connection".into(),
+            ));
+        }
         // encoded before anything is written: an invalid request leaves the connection usable
         let frame = message.encode_frame()?;
 
@@ -455,23 +579,12 @@ fn server_error(operation: &'static str, status: StatusResponse) -> Error {
 /// ([`Error::Unusable`]).
 pub struct DocumentStream<'a> {
     connector: &'a mut Connector,
-    pending: VecDeque<Document>,
-    finished: bool,
 }
 
 impl DocumentStream<'_> {
     /// The next document; `None` at the end of the stream, or after an error.
     pub async fn next(&mut self) -> Option<Result<Document>> {
-        while self.pending.is_empty() {
-            if self.finished {
-                return None;
-            }
-            if let Err(e) = self.read_batch().await {
-                self.finished = true;
-                return Some(Err(e));
-            }
-        }
-        self.pending.pop_front().map(Ok)
+        self.connector.next_document().await
     }
 
     /// Reads the rest of the stream.
@@ -482,37 +595,10 @@ impl DocumentStream<'_> {
         }
         Ok(documents)
     }
-
-    async fn read_batch(&mut self) -> Result<()> {
-        let result = async {
-            let mut header = [0; HEADER_SIZE];
-            self.connector.read_exact(&mut header).await?;
-
-            let Some((size, count)) = decode_batch_header(header)? else {
-                self.finished = true;
-                return Ok(());
-            };
-
-            let mut payload = vec![0; size];
-            self.connector.read_exact(&mut payload).await?;
-
-            for (keys, data) in decode_batch_payload(&payload, count)? {
-                let primary_key = *keys
-                    .first()
-                    .ok_or_else(|| Error::Protocol("streamed document without a key".into()))?;
-                self.pending.push_back(Document { primary_key, data });
-            }
-            Ok(())
-        }
-        .await;
-        self.connector.track(result)
-    }
 }
 
 impl Drop for DocumentStream<'_> {
     fn drop(&mut self) {
-        if !self.finished {
-            self.connector.close();
-        }
+        self.connector.abandon_stream();
     }
 }

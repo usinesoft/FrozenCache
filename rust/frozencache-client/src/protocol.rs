@@ -28,7 +28,8 @@ pub const MAX_BATCH_PAYLOAD: usize = 1_000_000;
 /// the server are around [`MAX_BATCH_PAYLOAD`] plus one document.
 const MAX_INCOMING_BATCH_PAYLOAD: usize = 256 * 1024 * 1024;
 
-pub(crate) const HEADER_SIZE: usize = 8;
+/// Size of a message header: message type, then body length (both `i32`, little-endian).
+pub const HEADER_SIZE: usize = 8;
 
 /// Values of the .NET `MessageType` enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

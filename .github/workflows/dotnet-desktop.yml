@@ -78,7 +78,7 @@ jobs:
     - name: Protocol tests
       run: cargo test --workspace
 
-    - name: Start .NET servers (plain and TLS)
+    - name: Start .NET servers (two plain, one TLS)
       working-directory: .
       run: |
         dotnet build FrozenCache/FrozenCache/FrozenCache.csproj -c Release -p:SkipDashboard=true
@@ -93,7 +93,8 @@ jobs:
         }
         start_server 5123 5213 false
         start_server 5124 5214 true
-        for port in 5123 5124; do
+        start_server 5125 5215 false
+        for port in 5123 5124 5125; do
           for i in $(seq 1 60); do nc -z localhost $port && break; sleep 1; done
           nc -z localhost $port || { cat "$RUNNER_TEMP/server-$port.log"; exit 1; }
         done
@@ -108,6 +109,11 @@ jobs:
       env:
         FROZENCACHE_TEST_SERVER: localhost:5124
         FROZENCACHE_TEST_TLS: "1"
+
+    - name: End-to-end tests (Aggregator, two replicas)
+      run: cargo test -p frozencache-client --test aggregator
+      env:
+        FROZENCACHE_TEST_SERVERS: localhost:5123+localhost:5125
 
     - name: Server logs
       if: failure()

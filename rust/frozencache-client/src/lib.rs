@@ -21,13 +21,20 @@
 //! # }
 //! ```
 
+mod aggregator;
 mod connector;
 mod error;
+mod local_cache;
+mod pool;
 pub mod protocol;
 mod transport;
 
+pub use aggregator::{
+    Aggregator, AggregatorOptions, CacheObject, ClusterStream, NewVersion, ReplicaStatus,
+};
 pub use connector::{
     ConnectOptions, Connector, DEFAULT_PING_TIMEOUT, Document, DocumentStream, Item,
 };
 pub use error::{Error, Result};
+pub use local_cache::CacheStatistics;
 pub use protocol::{CollectionInformation, CollectionsDescription};

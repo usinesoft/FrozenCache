@@ -63,18 +63,41 @@ pub enum Error {
          to its end); open a new one"
     )]
     Unusable,
+
+    /// A replica of an [`crate::Aggregator`] is not connected (its watchdog reconnects it when it's back).
+    #[error("server {0} is not connected")]
+    NotConnected(String),
+
+    /// No replica of an [`crate::Aggregator`] is connected.
+    #[error("no server is connected")]
+    NoServerAvailable,
+
+    /// An error on one replica of an [`crate::Aggregator`] operation that involves several.
+    #[error("{address}: {source}")]
+    Replica {
+        address: String,
+        #[source]
+        source: Box<Error>,
+    },
+
+    /// A document couldn't be converted from its stored bytes ([`crate::CacheObject::from_bytes`]).
+    #[error("cannot deserialize a document: {0}")]
+    Deserialize(String),
 }
 
 impl Error {
     /// True for failures of the connection itself, as opposed to errors reported by the server.
     pub fn is_connection_failure(&self) -> bool {
-        matches!(
-            self,
+        match self {
             Error::Connect { .. }
-                | Error::Tls { .. }
-                | Error::ConnectionClosed
-                | Error::Io(_)
-                | Error::Timeout(_)
-        )
+            | Error::Tls { .. }
+            | Error::ConnectionClosed
+            | Error::Io(_)
+            | Error::Timeout(_)
+            | Error::NotConnected(_)
+            | Error::NoServerAvailable => true,
+            Error::Replica { source, .. } => source.is_connection_failure(),
+            _ => false,
+        }
     }
 }

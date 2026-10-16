@@ -75,13 +75,15 @@ Dashboard           <- Angular 21 app (not a .NET project), served by the Frozen
 ```
 
 `rust/` (repo root, outside the .NET solution) is a Cargo workspace porting the client to Rust:
-`frozencache-client` (the `Connector`; `Aggregator`/`ConnectorPool` not ported yet) and `perftest` (same CLI and
-output as the .NET PerfTest). It must stay wire-compatible with the .NET server: `frozencache-client/src/protocol.rs`
+`frozencache-client` (`Connector`, `Aggregator` with its `ConnectorPool`s and local cache; typed collections via the
+`CacheObject` trait) and `perftest` (same CLI and output as the .NET PerfTest, `--servers` included). It must stay wire-compatible with the .NET server: `frozencache-client/src/protocol.rs`
 mirrors `Messages` (MessageType values, the field order of every `[Key(n)]` DTO, the 8-byte framing, the feed/stream
 batch format), and its tests assert byte-for-byte equality with encodings produced by the .NET code. **Any change to
 `Messages` (new message type, new or reordered field, batch format) must be mirrored there**, with the reference
 vectors regenerated from .NET. `cargo test` runs the protocol tests; with `FROZENCACHE_TEST_SERVER=host:port` (and
-`FROZENCACHE_TEST_TLS=1` for a TLS server) it also runs end-to-end tests against a running .NET server.
+`FROZENCACHE_TEST_TLS=1` for a TLS server) it also runs end-to-end tests against a running .NET server, and with
+`FROZENCACHE_TEST_SERVERS=host1:port1+host2:port2` the Aggregator tests against two. `rust/README.md` lists where the
+Rust Aggregator deliberately differs from the .NET one.
 
 The `FrozenCache` exe's build runs `npm ci` (if `node_modules` is missing) and `npm run build` in `Dashboard/`
 (target `BuildDashboard`, incremental on the dashboard sources), then ships `dist/FrozenCacheDashboard/browser` as a

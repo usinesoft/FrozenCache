@@ -44,6 +44,38 @@ public class DropCollectionTest
     }
 
     [Test]
+    public async Task DropWaitsForAFeedBeingAbortedInsteadOfDeletingPartOfTheCollection()
+    {
+        _store.CreateCollection(new CollectionMetadata("persons", "id"));
+
+        // a feed that stores some items, then fails on demand (a client disconnecting): until it has aborted,
+        // the version's files are open
+        var failNow = new TaskCompletionSource();
+        async IAsyncEnumerable<Item> ItemsThenFailure()
+        {
+            for (var i = 0; i < 1000; i++)
+                yield return new Item(new byte[100], i);
+            await failNow.Task;
+            throw new IOException("client disconnected");
+        }
+
+        var feed = _store.FeedCollectionAsync("persons", "v001", ItemsThenFailure());
+
+        var drop = Task.Run(() => _store.DropCollection("persons"));
+        await Task.Delay(300);
+        Assert.That(drop.IsCompleted, Is.False, "the drop must wait for the feed");
+
+        failNow.SetResult();
+        Assert.ThrowsAsync<IOException>(async () => await feed);
+        await drop;
+
+        // dropped entirely - before the fix, the delete failed part way on the open files, leaving the folder
+        // without metadata.json, after which every CreateCollection failed
+        Assert.That(Directory.Exists(Path.Combine(StoreName, "persons")), Is.False);
+        Assert.That(_store.CreateCollection(new CollectionMetadata("other", "id")), Is.True);
+    }
+
+    [Test]
     public async Task DropCollectionRemovesItFromDescriptionAndDisk()
     {
         using var connector = new Connector("localhost", _server!.Port);

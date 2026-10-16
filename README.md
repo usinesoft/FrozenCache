@@ -712,9 +712,9 @@ to profile protocol and serialization overhead in isolation from storage.
 
 ### Rust client
 
-[`rust/`](rust) contains a Rust client, wire-compatible with this server: the `Connector` and a
-Rust PerfTest with the same command line and output as the .NET one (the `Aggregator` is not
-ported yet). See [rust/README.md](rust/README.md).
+[`rust/`](rust) contains a Rust client, wire-compatible with this server: the `Connector`, the
+`Aggregator` (replicas, typed collections, local cache), and a Rust PerfTest with the same command
+line and output as the .NET one. See [rust/README.md](rust/README.md).
 
 ---
 
